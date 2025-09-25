@@ -138,7 +138,7 @@ cascade blend factor : 현재 픽셀이 cascade 경계와 얼마나 가까운지
 
 단점 : 비용 증가, 가만히 있어도 그림자가 움직임
 
-![image.png](image%207.png)
+![image.png](cascade_shadow_map/image%207.png)
 
 (여러 blue noise 를 사용하지 않고, 샘플링 위치에 시간에 따른 offset 적용(spatial shifting) → 낮은 비용으로 구현함)
 
@@ -150,7 +150,7 @@ cascade blend factor : 현재 픽셀이 cascade 경계와 얼마나 가까운지
 
 단점 : 계산 비용 있음 → 미리 계산해서 사용
 
-![image.png](image%208.png)
+![image.png](cascade_shadow_map/image%208.png)
 
 ### Interleaved Gradient Noise (Noise)
 

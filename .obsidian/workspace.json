@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "2d403fd2923ccc1a",
+        "id": "86145f5383d61eb7",
         "type": "tabs",
         "children": [
           {
-            "id": "39518a24fde5e7c1",
+            "id": "c1e1da7b38246b0d",
             "type": "leaf",
             "state": {
               "type": "markdown",
@@ -166,7 +166,8 @@
       }
     ],
     "direction": "horizontal",
-    "width": 388.5
+    "width": 200,
+    "collapsed": true
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -180,11 +181,13 @@
       "obsidian-git:Open Git source control": false
     }
   },
-  "active": "39518a24fde5e7c1",
+  "active": "96674a7bf46d1955",
   "lastOpenFiles": [
-    "voxelGI/Pasted image 20250925145945.png",
+    "voxelGI/image9.png",
     "voxelGI/voxelGI.md",
-    "voxelGI/Pasted image 20250925142953.png",
-    "voxelGI/Pasted image 20250925120250.png"
+    "Pasted.md",
+    "무제",
+    "voxelGI/image 8.png",
+    "voxelGI/image 7.png"
   ]
 }

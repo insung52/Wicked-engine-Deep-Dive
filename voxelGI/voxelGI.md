@@ -1430,7 +1430,7 @@ output_sdf: 거리 필드 데이터
 
 1. SDF  텍스쳐 빈공간 채우기 (Jump Flood 알고리즘 활용)
 2. 각 표면 픽셀에서, 표면 방향에 따른 선택된 방향 cone 에 대해서 cone Tracing 실행 (방향 내적 >0)
-	 ![[Pasted image 20250925142953.png]]
+	 ![[image 8.png]]
 3. 각 cone 에 대해서, cone 방향으로 출발
 	1. 단일 Cone Tracing 기본 작동 ConeTrace( )
 		- self-occlusion 방지 표면 offset 적용
@@ -1469,9 +1469,9 @@ output_sdf: 거리 필드 데이터
 ### 1. SDF Jump Flood
 
 Jump Flood Algorithm 을 이용해, 각 복셀에서 가장 가까운 표면까지의 정확한 거리 계산
-
+![[voxelGI/image 6.png]]
 모든 빈 복셀의 표면 복셀 까지의 정확한 거리(sdf) 계산
-![[Pasted image 20250925145945.png]]
+![[image9.png]]
 - 초기 jump_size = 복셀 해상도/2
 - 각 복셀마다 실행 (compute shader 병렬처리)
 - jump_size 만큼 27-1개 방향으로 jump
