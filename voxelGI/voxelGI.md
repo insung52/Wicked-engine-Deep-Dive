@@ -1429,20 +1429,48 @@ output_sdf: 거리 필드 데이터
 
 1. SDF  텍스쳐 빈공간 채우기 (Jump Flood 알고리즘 활용)
 2. 각 표면 픽셀에서, 표면 방향에 따른 선택된 방향 cone 에 대해서 cone Tracing 실행 (방향 내적 >0)
+	 ![[Pasted image 20250925142953.png]]
 3. 각 cone 에 대해서, cone 방향으로 출발
-4. cone 범위는 거리에 따라 확장 (cone 각도)
-5. SDF 값을 활용, 빈공간에서는 step 값을 증가시켜 뛰어넘음
-6. 표면을 포함한 복셀에 도달할 시, 복셀 텍스쳐 샘플링
-    1. 적절한 clipmap 레벨 선택
-    2. 복셀 radiance 샘플링
-7. 샘플링된 alpha 값이 누적 1 도달, 또는 최대 거리에 도달할때까지 반복 (Front-to-back 블렌딩)
+	1. 단일 Cone Tracing 기본 작동 ConeTrace( )
+		- self-occlusion 방지 표면 offset 적용
+		- Anisotropic 방향 설정 (6개 면 방향 중 3개 선택)
+		- 거리별 LOD 계산 -> cone 직경에 맞는 clipmap 레벨 선택
+			![image.png](image%206.png)
+		- 복셀 샘플링 SampleVoxelClipMap( )
+			- 옵션 1. 6개 면 중 cone 방향에 맞는 3개의 면 샘플링 후 가중 평균
+				- temporal processing 에서 16개 cone 방향 데이터를 미리 계산하는데 사용
+				- specular reflection 계산 시 사용
+					```
+					// 반사 방향 하나만 계산
+					float3 coneDirection = reflect(-V, N);  // 1개 방향
+					float4 amount = ConeTrace(voxels, P, N, coneDirection, aperture, stepsize, true);
+					```
+			- 옵션 2. 16개 cone 방향 중 하나를 미리 입력 받고 샘플링
+				- 최종 렌더링 단계의 diffuse 조명에 사용 (반구 전체 샘플링)
+					```
+					// 16개 방향 모두 계산해야 함
+					for (uint i = 0; i < DIFFUSE_CONE_COUNT; ++i)  // 16번 반복
+					{
+						amount += ConeTrace(voxels, P, N, DIFFUSE_CONE_DIRECTIONS[i], aperture, 1, false, precomputed);
+					}
+					```
+				- 미리 계산된 값을 직접 조회 -> 성능 최적화
+		- Front-to-Back 블렌딩
+			- 최대 (1 - 누적 alpha) 만큼만 새로운 색상이 기여할 수 있음
+		 ```
+		float a = 1 - alpha;  // 남은 투명도
+		color += a * sam.rgb;  // 새로운 색상 추가
+		alpha += a * sam.a;  // 새로운 alpha 추가
+		  ```
+		- 현재 도달 위치의 sdf 값을 이용, step size 조정
+		- 누적 alpha 1 이상, 또는 최대 거리 도달 시 까지 반복
 
 ### 1. SDF Jump Flood
 
 Jump Flood Algorithm 을 이용해, 각 복셀에서 가장 가까운 표면까지의 정확한 거리 계산
 
 모든 빈 복셀의 표면 복셀 까지의 정확한 거리(sdf) 계산
-
+![[Pasted image 20250925145945.png]]
 - 초기 jump_size = 복셀 해상도/2
 - 각 복셀마다 실행 (compute shader 병렬처리)
 - jump_size 만큼 27-1개 방향으로 jump
@@ -1565,7 +1593,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
 ### 2. 실시간 Cone Tracing 수행
 
 - voxelConeTracingHF.hlsli
-    
+
     ![image.png](image%205.png)
     
     ```glsl
@@ -1890,11 +1918,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
         640~767: -Z 방향 (face_offset = 5/22 = 0.227)  ← 선택됨
         
 
-Cone Tracing 기본 작동
 
-- cone 원점에서부터 점점 멀리 step 을 주어 먼 거리까지 탐색
-- 각 step 마다 lod 개념을 사용해 cone 의 그 거리에 해당하는 모든 복셀을 샘플링 하지 않고, (전통적인 개념)
-- 대표하는 하나의 복셀만 샘플링
 
 ![image.png](image%206.png)
 
