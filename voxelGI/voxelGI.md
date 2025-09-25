@@ -332,7 +332,7 @@ clipmap.center = center;
           };
         ```
         
-- 위치 변환, 6축 투영 (생략)
+- ~~위치 변환, 6축 투영~~ (생략)
     
     ```glsl
     #ifndef VOXELIZATION_GEOMETRY_SHADER_ENABLED
@@ -411,7 +411,7 @@ clipmap.center = center;
     	// 가장 큰 성분 찾기 : 삼각형이 어느 축에 가장 잘 보이는지 판단
     ```
     
-- 삼각형 AABB 계산 - 사용 안됨
+- ~~삼각형 AABB 계산~~ - 사용 안됨
     
     ```glsl
     	float3 aabb_min = min(input[0].pos.xyz, min(input[1].pos.xyz, input[2].pos.xyz));
@@ -444,7 +444,7 @@ clipmap.center = center;
     
     ```
     
-- Conservative Rasterization (옵션, 주석처리됨)
+- ~~Conservative Rasterization~~ (옵션, 주석처리됨)
     
     ```glsl
     #ifdef VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED
@@ -569,9 +569,9 @@ clipmap.center = center;
           }
         ```
         
-    - Conservative Rasterization 검증 (옵션)
+    - ~~Conservative Rasterization 검증~~ (옵션)
         
-        보존적 래스터화 검사 (objectPS_voxelizer.hlsl:76-87)
+        ~~보존적 래스터화 검사 (objectPS_voxelizer.hlsl:76-87)~~
         
         ```glsl
         #ifdef VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED  
