@@ -1,19 +1,19 @@
 {
   "main": {
-    "id": "ae7ea3b29ad8560a",
+    "id": "e77aefe371a2718f",
     "type": "split",
     "children": [
       {
-        "id": "86145f5383d61eb7",
+        "id": "fc83025a559b0416",
         "type": "tabs",
         "children": [
           {
-            "id": "c1e1da7b38246b0d",
+            "id": "86b25fbac876d980",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "voxelGI/voxelGI.md",
+                "file": "voxelGI.md",
                 "mode": "source",
                 "source": false
               },
@@ -27,15 +27,15 @@
     "direction": "vertical"
   },
   "left": {
-    "id": "30c7694be6444475",
+    "id": "560c393df7c23368",
     "type": "split",
     "children": [
       {
-        "id": "f93563c6f00c423a",
+        "id": "cac52590e1c7a33a",
         "type": "tabs",
         "children": [
           {
-            "id": "96674a7bf46d1955",
+            "id": "e9fc2cd95590f10b",
             "type": "leaf",
             "state": {
               "type": "file-explorer",
@@ -48,7 +48,7 @@
             }
           },
           {
-            "id": "1f243491cc33ffdb",
+            "id": "01ffee2c42406400",
             "type": "leaf",
             "state": {
               "type": "search",
@@ -61,17 +61,17 @@
                 "sortOrder": "alphabetical"
               },
               "icon": "lucide-search",
-              "title": "Search"
+              "title": "검색"
             }
           },
           {
-            "id": "d5fd9407dbbefe36",
+            "id": "d15f39c67a9f6b0f",
             "type": "leaf",
             "state": {
               "type": "bookmarks",
               "state": {},
               "icon": "lucide-bookmark",
-              "title": "Bookmarks"
+              "title": "북마크"
             }
           }
         ]
@@ -81,20 +81,20 @@
     "width": 300
   },
   "right": {
-    "id": "2d640b8ad7336633",
+    "id": "5125ff9df9f0cfc9",
     "type": "split",
     "children": [
       {
-        "id": "28ca546d87ef2ffb",
+        "id": "d0507f2189610a4d",
         "type": "tabs",
         "children": [
           {
-            "id": "b2c799b6af629bed",
+            "id": "6d98c91d4afba6cc",
             "type": "leaf",
             "state": {
               "type": "backlink",
               "state": {
-                "file": "voxelGI/voxelGI.md",
+                "file": "voxelGI.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,25 +104,25 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for voxelGI"
+              "title": "voxelGI 의 백링크"
             }
           },
           {
-            "id": "a537acbaa5bc7cfa",
+            "id": "5cde83a8dd85c46d",
             "type": "leaf",
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "voxelGI/voxelGI.md",
+                "file": "voxelGI.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links from voxelGI"
+              "title": "voxelGI 의 나가는 링크"
             }
           },
           {
-            "id": "1016e8c50bf8338a",
+            "id": "3f9931158f10f4b9",
             "type": "leaf",
             "state": {
               "type": "tag",
@@ -133,40 +133,29 @@
                 "searchQuery": ""
               },
               "icon": "lucide-tags",
-              "title": "Tags"
+              "title": "태그"
             }
           },
           {
-            "id": "35df9cf013dde972",
+            "id": "3939d36a7df23977",
             "type": "leaf",
             "state": {
               "type": "outline",
               "state": {
-                "file": "voxelGI/voxelGI.md",
+                "file": "voxelGI.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of voxelGI"
-            }
-          },
-          {
-            "id": "453393be67468499",
-            "type": "leaf",
-            "state": {
-              "type": "git-view",
-              "state": {},
-              "icon": "git-pull-request",
-              "title": "Source Control"
+              "title": "voxelGI 의 개요"
             }
           }
-        ],
-        "currentTab": 4
+        ]
       }
     ],
     "direction": "horizontal",
-    "width": 200,
+    "width": 300,
     "collapsed": true
   },
   "left-ribbon": {
@@ -177,21 +166,9 @@
       "daily-notes:오늘의 일일 노트 열기": false,
       "templates:템플릿 삽입": false,
       "command-palette:명령어 팔레트 열기": false,
-      "bases:새 베이스 생성하기": false,
-      "obsidian-git:Open Git source control": false
+      "bases:새 베이스 생성하기": false
     }
   },
-  "active": "c1e1da7b38246b0d",
-  "lastOpenFiles": [
-    "voxelGI/image8.png",
-    "voxelGI/image.png",
-    "Pasted.md",
-    "voxelGI/voxelGI.md",
-    "voxelGI/image1.png",
-    "voxelGI/무제.canvas",
-    "voxelGI/image6.png",
-    "voxelGI/image9.png",
-    "무제",
-    "voxelGI/image7.png"
-  ]
+  "active": "86b25fbac876d980",
+  "lastOpenFiles": []
 }

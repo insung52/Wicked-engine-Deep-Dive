@@ -79,7 +79,7 @@ wicked engine 은 deferred rendering 이용 → G-buffer 응용
     {
     ```
     
-    ![image.png](image%201.png)
+    ![image.png](image1.png)
     
 1. 물리적 복셀 좌표 (Physical Voxel Coordinate)
     - 기준: 3D 텍스처의 실제 메모리 주소
@@ -91,7 +91,7 @@ wicked engine 은 deferred rendering 이용 → G-buffer 응용
     // Y: 20 + 1**128 = 148 (clipmap 레벨 오프셋)
     // Z: 30 * 13 = 390 (채널 오프셋)
     
-    ![image.png](image%202.png)
+    ![image.png](image2.png)
     
 2. ClipMap 좌표계
     - 기준: 정규화된 [0,1] 범위
@@ -1100,7 +1100,7 @@ clipmap.center = center;
       RWTexture3D<uint> output_atomic : register(u0);  // ← UAV로 3D 텍스처에 직접 기록
     ```
     
-    ![image.png](image%203.png)
+    ![image.png](image3.png)
     
     cone tracing 이전이므로, X 축 (Width) = 64*6
     
@@ -1427,16 +1427,41 @@ output_sdf: 거리 필드 데이터
 ## [3] Cone Tracing
 
 기본 cone tracing 과정
-
 1. SDF  텍스쳐 빈공간 채우기 (Jump Flood 알고리즘 활용)
-2. 각 표면 픽셀에서, 표면 방향에 따른 선택된 방향 cone 에 대해서 cone Tracing 실행 (방향 내적 >0)
-	 ![[image 8.png]]
-3. 각 cone 에 대해서, cone 방향으로 출발
+2. 각 복셀은 기본적으로 면 6개 방향 + 16개 cone 방향 존재
+	![image.png](image5.png)
+	```glsl
+    static const int DIFFUSE_CONE_COUNT = 16;  // 32 개도 선택 가능
+    static const float DIFFUSE_CONE_APERTURE = 0.872665f;
+    
+    static const float3 DIFFUSE_CONE_DIRECTIONS[16] = {
+    	float3(0.57735f, 0.57735f, 0.57735f),
+    	float3(0.57735f, -0.57735f, -0.57735f),
+    	float3(-0.57735f, 0.57735f, -0.57735f),
+    	float3(-0.57735f, -0.57735f, 0.57735f),
+    	float3(-0.903007f, -0.182696f, -0.388844f),
+    	float3(-0.903007f, 0.182696f, 0.388844f),
+    	float3(0.903007f, -0.182696f, 0.388844f),
+    	float3(0.903007f, 0.182696f, -0.388844f),
+    	float3(-0.388844f, -0.903007f, -0.182696f),
+    	float3(0.388844f, -0.903007f, 0.182696f),
+    	float3(0.388844f, 0.903007f, -0.182696f),
+    	float3(-0.388844f, 0.903007f, 0.182696f),
+    	float3(-0.182696f, -0.388844f, -0.903007f),
+    	float3(0.182696f, 0.388844f, -0.903007f),
+    	float3(-0.182696f, 0.388844f, 0.903007f),
+    	float3(0.182696f, -0.388844f, 0.903007f)
+    };
+    ```
+1. 각 표면 픽셀에서, 표면 방향에 따른 선택된 방향 cone 에 대해서 cone Tracing 실행 
+	- ( 방향 내적 >0 )
+	![image.png](image8.png)
+2. 각 cone 에 대해서, cone 방향으로 출발
 	1. 단일 Cone Tracing 기본 작동 ConeTrace( )
 		- self-occlusion 방지 표면 offset 적용
 		- Anisotropic 방향 설정 (6개 면 방향 중 3개 선택)
 		- 거리별 LOD 계산 -> cone 직경에 맞는 clipmap 레벨 선택
-			![image.png](image%206.png)
+			![image.png](image6.png)
 		- 복셀 샘플링 SampleVoxelClipMap( )
 			- 옵션 1. 6개 면 중 cone 방향에 맞는 3개의 면 샘플링 후 가중 평균
 				- temporal processing 에서 16개 cone 방향 데이터를 미리 계산하는데 사용
@@ -1469,16 +1494,16 @@ output_sdf: 거리 필드 데이터
 ### 1. SDF Jump Flood
 
 Jump Flood Algorithm 을 이용해, 각 복셀에서 가장 가까운 표면까지의 정확한 거리 계산
-![[voxelGI/image 6.png]]
+
 모든 빈 복셀의 표면 복셀 까지의 정확한 거리(sdf) 계산
-![[image9.png]]
+![image.png](image9.png)
 - 초기 jump_size = 복셀 해상도/2
 - 각 복셀마다 실행 (compute shader 병렬처리)
 - jump_size 만큼 27-1개 방향으로 jump
 - jump 위치까지의 거리 + jump 위치의 sdf < 현재 복셀의 sdf 라면, 현재 복셀의 sdf 업데이트
 - jump_size /=2 (jump_size 1 까지, 총 log2(복셀 해상도) 만큼 반복)
 
-![image.png](image%204.png)
+![image.png](image4.png)
 
 - 동작 예시
 
@@ -1594,32 +1619,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
 ### 2. 실시간 Cone Tracing 수행
 
 - voxelConeTracingHF.hlsli
-
-    ![image.png](image%205.png)
     
-    ```glsl
-    static const int DIFFUSE_CONE_COUNT = 16;  // 32 개도 선택 가능
-    static const float DIFFUSE_CONE_APERTURE = 0.872665f;
-    
-    static const float3 DIFFUSE_CONE_DIRECTIONS[16] = {
-    	float3(0.57735f, 0.57735f, 0.57735f),
-    	float3(0.57735f, -0.57735f, -0.57735f),
-    	float3(-0.57735f, 0.57735f, -0.57735f),
-    	float3(-0.57735f, -0.57735f, 0.57735f),
-    	float3(-0.903007f, -0.182696f, -0.388844f),
-    	float3(-0.903007f, 0.182696f, 0.388844f),
-    	float3(0.903007f, -0.182696f, 0.388844f),
-    	float3(0.903007f, 0.182696f, -0.388844f),
-    	float3(-0.388844f, -0.903007f, -0.182696f),
-    	float3(0.388844f, -0.903007f, 0.182696f),
-    	float3(0.388844f, 0.903007f, -0.182696f),
-    	float3(-0.388844f, 0.903007f, 0.182696f),
-    	float3(-0.182696f, -0.388844f, -0.903007f),
-    	float3(0.182696f, 0.388844f, -0.903007f),
-    	float3(-0.182696f, 0.388844f, 0.903007f),
-    	float3(0.182696f, -0.388844f, 0.903007f)
-    };
-    ```
     
     ConeTraceDiffuse (voxelConeTracingHF.hlsli:128)
     
@@ -1918,10 +1918,6 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
         512~639: +Z 방향 (face_offset = 4/22 = 0.182)
         640~767: -Z 방향 (face_offset = 5/22 = 0.227)  ← 선택됨
         
-
-
-
-![image.png](image%206.png)
 
 - Diffuse 간접 조명 계산 vxgi_resolve_diffuseCS.hlsl
     

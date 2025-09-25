@@ -53,13 +53,13 @@ int 자료형의 경우 4억개 정도의 메시들까지 가능
 
 ![image.png](image.png)
 
-![image.png](image%201.png)
+![image.png](cascade_shadow_map/image%201.png)
 
 개념 : (카메라 기준)거리에 따라 다른 해상도의 shadow map 사용
 
 카메라 기준 프러스텀 생성 및 거리에 따라 분할
 
-![image.png](image%202.png)
+![image.png](cascade_shadow_map/image%202.png)
 
 이를 바탕으로 light는 필요한 부분만 shadow map 계산
 
@@ -85,7 +85,7 @@ shadow map 의 다음 레벨과의 경계에 가까운 uv 좌표일 수록 casca
 - 명확한 패턴이 보임
 - 샘플링 한번만 함
 
-![image.png](image%203.png)
+![image.png](cascade_shadow_map/image%203.png)
 
 화면에 안 보이는 객체가 어떻게 그림자를 만들 수 있나
 
@@ -96,7 +96,7 @@ shadow map 의 다음 레벨과의 경계에 가까운 uv 좌표일 수록 casca
 
 ## Dithering
 
-![image.png](image%204.png)
+![image.png](cascade_shadow_map/image%204.png)
 
 - 이미지 공간에서의 서로 다른 두 요소를 선택적인 coarse 샘플링으로 blending
 - ex. opaque 파이프라인을 유지하면서 alpha 처리 가능
@@ -114,7 +114,7 @@ cascade blend factor : 현재 픽셀이 cascade 경계와 얼마나 가까운지
 
 단점 : 패턴이 눈에 잘보임
 
-![image.png](image%205.png)
+![image.png](cascade_shadow_map/image%205.png)
 
 ### Blue Noise (Noise)
 

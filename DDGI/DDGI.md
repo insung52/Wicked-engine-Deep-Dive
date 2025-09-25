@@ -387,13 +387,13 @@ tlas 의 경우 매 프레임 메시들의 움직임을 추적해서 재구성�
         
         - chebyshev
             
-            ![image.png](image%201.png)
+            ![image.png](DDGI/image%201.png)
             
             차폐되었나?를 true false 대신 확률로 표현
             
             목적 : 확실한 가시성은 보존하고 애매한 경우는 보수적으로 처리
             
-            ![image.png](image%202.png)
+            ![image.png](DDGI/image%202.png)
             
             Chebyshev's Inequality 의 단측형
             
@@ -649,7 +649,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     - ray 가 광원(emissive surface)에 직접 충돌
     - 완전 반사면에서 caustic 효과
         
-        ![image.png](image%203.png)
+        ![image.png](DDGI/image%203.png)
         
     - Monte Carlo 샘플링의 한계
     
@@ -661,7 +661,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
         - 3σ 범위: 99.7% 확률
         - 8σ 범위: 99.999999% 확률 (거의 모든 경우, 이상치만 제외)
         
-        ![image.png](image%204.png)
+        ![image.png](DDGI/image%204.png)
         
     - 그래픽스에 적용 : 정상적인 radiance 범위
         - 임계값 = shortMean + 8 * dev
@@ -1129,7 +1129,7 @@ L1_RGB ProjectOntoL1_RGB(half3 direction, half3 value) {
 
 octahedral mapping
 
-![image.png](image%205.png)
+![image.png](DDGI/image%205.png)
 
 # DDGI Probe Sampling 과정
 
