@@ -2078,6 +2078,7 @@ float4 lighting_pass_main(...)
   - Indirect lighting 비중: 높음
   - 잔상 가시성: 높음 (직접 조명 대비 간접 조명 기여도 증가)
 
+
 	복잡한 씬 예시 1 (vxgi debug off)
 
 <https://github.com/user-attachments/assets/606358a4-0831-4687-b36d-9bd7adc0715b>
