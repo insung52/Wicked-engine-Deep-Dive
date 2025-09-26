@@ -2004,6 +2004,8 @@ VXGI 결과물 : VXGI Pass 출력
 
 vxgi_resolve_diffuseCS → diffuse_indirect_texture (화면 해상도)
 vxgi_resolve_specularCS → specular_indirect_texture (화면 해상도)
+각 화면 픽셀에 대해 해당 fragment 의 위치에서 cone Tracing 수행함
+
 
 Lighting Pass에서 사용
 
@@ -2029,3 +2031,78 @@ float4 lighting_pass_main(...)
   return float4(final_color, 1.0);
 }
 ```
+
+
+
+# VXGI Temporal Blending의 Trade-off 문제
+
+## 문제 개요
+
+  Flickering 해결을 위해 blend_speed를 감소시키면 새로운 잔상(afterimage) 문제가 발생하는 상충 관계
+
+## 발생 과정
+
+  1단계: 원본 문제 (Flickering)
+  
+  - 기본 설정: blend_speed = 0.5
+  - 원인: 너무 많은 조명 개수 -> 복셀 radiance의 급격한 변화
+  - 현상: 간접 조명이 반짝거리는 현상
+
+  2단계: 해결 시도
+
+  // vxgi_temporalCS.hlsl
+  static const float blend_speed = 0.1; // 0.5에서 감소
+  - 효과: Flickering 현상 해결
+  - 부작용: 간접 조명의 Temporal blending이 과도하게 느려질 수 있음
+
+  3단계: 새로운 문제 발생 (Afterimage)
+
+  - 조건: Multi-bounce가 활발한 복잡한 씬
+  - 현상: 조명 변화 시 간접 조명 정보가 매우 느리게 업데이트
+  - 결과: 최종 렌더링 화면 또는 vxgi debug 화면에서 명확한 잔상 확인 가능
+
+## 씬 복잡도별 영향
+
+  직접 조명의 경우 vxgi 와 상관없이 실시간 조명 계산 결과를 사용
+  vxgi 결과는 간접 조명으로만 사용됨
+
+  1. 단순한 씬 (바닥 + 구 몇 개)
+
+  - Direct lighting 비중: 높음
+  - Indirect lighting 비중: 낮음
+  - 잔상 가시성: 낮음 (직접 조명이 압도)
+
+  2. 복잡한 씬 (밀폐된 공간, 컬러 벽)
+
+  - Multi-bounce 발생: 활발
+  - Indirect lighting 비중: 높음
+  - 잔상 가시성: 높음 (직접 조명 대비 간접 조명 기여도 증가)
+
+	복잡한 씬 예시 1 (vxgi debug off)
+	<https://github.com/user-attachments/assets/606358a4-0831-4687-b36d-9bd7adc0715b>
+	예시 2 (vxgi debug on)
+	<https://github.com/user-attachments/assets/92f603da-3ae4-43e2-92f5-ae7b916de72d>
+
+## Trade-off 딜레마
+
+  | 설정                | Flickering | Afterimage | 적합한 씬      |
+  |-------------------|------------|------------|------------|
+  | blend_speed = 0.5 | 발생         | 미미         | 단순한 씬      |
+  | blend_speed = 0.1 | 해결         | 발생         | 복잡한 씬에서 문제 |
+
+## 근본 원인
+
+  - 고정된 blend_speed: 씬 복잡도와 조명 상황을 고려하지 않음
+  - 일괄적 처리: 모든 복셀에 동일한 temporal blending 적용
+
+## 개선 방향
+
+  - 적응형 blending: 씬 복잡도/조명 변화율에 따른 동적 조정 (DDGI 의 적응형 blending)
+  - 하이브리드 접근: 조명별 또는 영역별 다른 blending 전략
+  - 스마트 감지: 급격한 조명 변화 감지 시 일시적 blending 비활성화 (DDGI 의 적응형 blending)
+
+
+
+
+
+
