@@ -2079,9 +2079,12 @@ float4 lighting_pass_main(...)
   - 잔상 가시성: 높음 (직접 조명 대비 간접 조명 기여도 증가)
 
 	복잡한 씬 예시 1 (vxgi debug off)
-	<https://github.com/user-attachments/assets/606358a4-0831-4687-b36d-9bd7adc0715b>
+
+<https://github.com/user-attachments/assets/606358a4-0831-4687-b36d-9bd7adc0715b>
+
 	예시 2 (vxgi debug on)
-	<https://github.com/user-attachments/assets/92f603da-3ae4-43e2-92f5-ae7b916de72d>
+
+<https://github.com/user-attachments/assets/92f603da-3ae4-43e2-92f5-ae7b916de72d>
 
 ## Trade-off 딜레마
 
