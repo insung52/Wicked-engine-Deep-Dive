@@ -1,12 +1,72 @@
-# ddgi
+렌더러에 ddgi update
 
-DDGI 개요
+scene 내용물 바뀌었을 때만 호출?
+
+updateRaytracingBVH
+
+이것도 바뀌었을때만?
+
+해당 bvh 업데이트할때 blas 도 업데이트?
+
+blas 각각 어디에 저장되는지?
+
+objectcomponent?
+
+
+
+
+# DDGI 호출
+
+## ddgi update
+
+scene 에 변화가 없더라도 매 프레임 DDGI 호출
+
+- Ray tracing 구조 (TLAS, BLAS bvh) 없으면 스킵
+- DDGI 버퍼 없으면 스킵
+- Ray tracing이 아직 처리 중이면 스킵
+
+```c
+//wiRenderPath3D.cpp:921-927
+if (wi::renderer::GetDDGIEnabled() && getSceneUpdateEnabled())
+{
+  wi::renderer::DDGI(*scene, cmd);
+}
+```
+
+DDGI 함수 내부 조건
+```c
+// wiRenderer.cpp:12063
+void DDGI(const wi::scene::Scene& scene, CommandList cmd)
+{
+  if (!scene.TLAS.IsValid() && !scene.BVH.IsValid())
+	  return;  // Ray tracing 구조 없으면 스킵
+
+  if (GetDDGIRayCount() == 0)
+	  return;  // Ray 개수가 0이면 스킵
+
+  if (!scene.ddgi.ray_buffer.IsValid())
+	  return;  // DDGI 버퍼 없으면 스킵
+
+  if (wi::jobsystem::IsBusy(raytracing_ctx))
+	  return;  // Ray tracing이 아직 처리 중이면 스킵
+
+  // 실제 DDGI 업데이트 수행
+}
+```
+
+
+
+
+
+
+## DDGI 개요
 
 DDGI는 실시간 글로벌 일루미네이션을 위해 3D 공간에 light probe들을 배치하고, 이들 간의 보간을 통해 간접광을 계산하는 기법입니다.
 
 tlas blas - 광선-오브젝트 교차 테스트를 빠르게 수행하기 위한 가속 구조(Acceleration Structure)
 
 atlas - 여러 텍스쳐를 한 파일로 저장
+
 
 # DDGI Spherical Harmonics 계산 과정
 
@@ -54,7 +114,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
         }
         ```
         
-        1. 최종 Scene AABB 계산 
+        2. 최종 Scene AABB 계산 
         
         ```glsl
         // wiScene.cpp:411-415
@@ -322,6 +382,249 @@ probe 에서 광선 발사
 각 메시들은 변형시에만 blas 를 재구성하고,
 
 tlas 의 경우 매 프레임 메시들의 움직임을 추적해서 재구성합니다.
+
+### raytracing 가속 구조
+
+BVH (Bounding Volume Hierarchy) 구조:
+
+TLAS Root ├── Instance A (Car) │ └── BLAS A │ ├── BV: Wheels │ │ ├── Triangle 1,2,3... │ └── BV: Body │ ├── Triangle 100,101... ├── Instance B (Building) │ └── BLAS B │ ├── BV: Floor │ └── BV: Walls
+
+BLAS (Bottom Level AS)
+- MeshComponent 내부에 저장
+```c
+// wiScene_Components.h:758
+struct MeshComponent {
+  wi::vector<wi::graphics::RaytracingAccelerationStructure> BLASes; // one BLAS per LOD
+  // lod 에 따라 디테일 차이
+  mutable BLAS_STATE BLAS_state = BLAS_STATE_NEEDS_REBUILD;
+  // ... 기타 메시 데이터
+};
+```
+- Scene의 ComponentManager 에서 관리
+```c
+// wiScene.h:35
+class Scene {
+  wi::ecs::ComponentManager<MeshComponent>& meshes =
+	  componentLibrary.Register<MeshComponent>("wi::scene::Scene::meshes", 4);
+  // 각 MeshComponent가 자체 BLAS들을 포함
+};
+```
+- 구조적 계층:
+  Scene
+  └── ComponentManager<MeshComponent> meshes
+      └── Entity 1: MeshComponent
+          └── BLASes[0] (LOD 0)
+          └── BLASes[1] (LOD 1)
+          └── BLASes[2] (LOD 2)
+          └── BLAS_state
+      └── Entity 2: MeshComponent
+          └── BLASes[0]
+          └── BLAS_state
+      └── ...
+
+
+```c
+// 각 메시별로 생성, 동일 메시들의 경우 1개 blas 를 공유(참조)
+  for (각 메시) {
+      BLAS blas;
+      blas.geometryDesc = {
+          .vertices = mesh.vertices,
+          .indices = mesh.indices,
+          .triangles = mesh.triangleCount
+      };
+      // GPU에서 BVH 트리 구축
+      device->BuildBLAS(blas);
+  }
+```
+
+
+TLAS (Top Level AS)
+
+```c
+// 씬 전체 구조
+  TLAS tlas;
+  for (각 오브젝트 인스턴스) {
+      InstanceDesc instance = {
+          .blasIndex = object.meshBLAS,
+          .transform = object.worldMatrix,
+          .instanceID = object.id
+      };
+      tlas.instances.push_back(instance);
+  }
+  device->BuildTLAS(tlas);
+```
+
+blas 생성 과정
+
+```c
+// BLAS 생성 과정 (wiScene_Components.cpp:1460+)
+  void MeshComponent::StreamOutBLAS() {
+      RaytracingAccelerationStructureDesc desc;
+      desc.type = Type::BOTTOMLEVEL;
+
+      // 각 서브셋(Material Group)별로 geometry 추가
+      for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex) {
+          const MeshSubset& subset = subsets[subsetIndex];
+          desc.bottom_level.geometries.emplace_back();
+          auto& geometry = desc.bottom_level.geometries.back();
+
+          // 삼각형 데이터 설정
+          geometry.type = TRIANGLES;
+          geometry.triangles.vertex_buffer = generalBuffer;     // 정점 버퍼
+          geometry.triangles.vertex_byte_offset = vb_pos_wind.offset;
+          geometry.triangles.index_buffer = generalBuffer;      // 인덱스 버퍼
+          geometry.triangles.index_count = subset.indexCount;   // 삼각형 개수
+          geometry.triangles.vertex_count = vertex_positions.size();
+      }
+
+      // GPU에 BLAS 리소스 생성
+      device->CreateRaytracingAccelerationStructure(&desc, &BLASes[lod]);
+  }
+```
+
+tlas 생성 과정
+
+```c
+// TLAS 생성 과정 (wiScene.cpp:440+)
+  RaytracingAccelerationStructureDesc desc;
+  desc.type = Type::TOPLEVEL;
+  desc.top_level.count = instanceArraySize * 2;  // 인스턴스 최대 개수
+
+  // Instance Buffer 생성 (인스턴스 Transform + BLAS 참조 저장)
+  GPUBufferDesc bufdesc;
+  bufdesc.misc_flags |= ResourceMiscFlag::RAY_TRACING;
+  bufdesc.stride = device->GetTopLevelAccelerationStructureInstanceSize();  // 인스턴스 크기
+  bufdesc.size = bufdesc.stride * desc.top_level.count;
+  device->CreateBuffer(&bufdesc, nullptr, &desc.top_level.instance_buffer);
+
+  // TLAS 리소스 생성
+  device->CreateRaytracingAccelerationStructure(&desc, &TLAS);
+```
+
+blas 업데이트 (메시가 변형될 때만 업데이트)
+
+- NEEDS_REBUILD: 메시 지오메트리가 완전히 바뀜 (새 정점/삼각형)
+    - BVH 구조 완전 재구축
+- NEEDS_REFIT: 정점 위치만 바뀜 (애니메이션, 스키닝)
+    - 기존 BVH 구조 유지, 바운딩 박스만 업데이트
+- COMPLETE: 변화 없음 → 스킵 (성능 최적화)
+
+```c
+// wiRenderer.cpp:5607+ - 매 프레임
+  for (size_t i = 0; i < scene.meshes.GetCount(); ++i) {
+      const MeshComponent& mesh = scene.meshes[i];
+      for (auto& BLAS : mesh.BLASes) {
+          switch (mesh.BLAS_state) {
+          case BLAS_STATE_COMPLETE:
+              break;                               // 변화 없음 - 스킵
+          case BLAS_STATE_NEEDS_REBUILD:
+              device->BuildRaytracingAccelerationStructure(&BLAS, cmd, nullptr);  // 완전 재구축
+              break;
+          case BLAS_STATE_NEEDS_REFIT:
+              device->BuildRaytracingAccelerationStructure(&BLAS, cmd, &BLAS);    // 부분 업데이트
+              break;
+          }
+      }
+      mesh.BLAS_state = BLAS_STATE_COMPLETE;
+  }
+```
+
+tlas 업데이트 (씬 전체)
+
+- 매 프레임 재구축 (인스턴스 transform 변화 추적)
+- 오브젝트가 움직이면 → TLAS 업데이트
+- blas 업데이트 -> tlas 도 업데이트
+- BLAS는 그대로 유지 (메시 자체는 안 바뀜)
+
+```c
+// wiRenderer.cpp:5689 - 매 프레임
+  device->BuildRaytracingAccelerationStructure(&scene.TLAS, cmd, nullptr);
+```
+
+- 실제 작동 코드
+
+```c
+// ddgi_raytraceCS.hlsl:229
+		RayDesc ray;
+		ray.Origin = probePos;
+		ray.TMin = 0; // don't need TMin because we are not tracing from a surface
+		// 최소 거리 (surface가 아닌 공중(probe)에서 시작하므로 0)
+		ray.TMax = FLT_MAX; // 최대 거리(무한대)
+		ray.Direction = normalize(raydir);
+
+#ifdef RTAPI 
+		// Hardware RT (RTX/RDNA2+)
+		wiRayQuery q; // Ray Query 초기화, Xbox Scarlett 용 또는 일반 RayQuery<0>
+		q.TraceRayInline(
+			scene_acceleration_structure,	// RaytracingAccelerationStructure AccelerationStructure, tlas 시작
+			// RAY_FLAG_CULL_BACK_FACING_TRIANGLES |  // 뒷면 컬링
+			RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | // 절차적 지오메트리 스킵
+			RAY_FLAG_FORCE_OPAQUE,			// uint RayFlags  투명도 무시, 불투명 처리
+			push.instanceInclusionMask,		// uint InstanceInclusionMask 어떤 인스턴스 포함할지 (비트마스크)
+			ray								// RayDesc Ray 구조체
+		);
+		while (q.Proceed());
+			// GPU RT 코어가 자동 BVH 순회
+		  // 내부적으로:
+		  // 1. TLAS 루트에서 시작
+		  // 2. Ray-AABB 테스트로 인스턴스 찾기
+		  // 3. 해당 인스턴스의 BLAS로 이동
+		  // 4. Ray-Triangle 테스트로 최종 충돌 찾기
+		if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+		// COMMITTED_TRIANGLE_HIT: 삼각형과 충돌
+	  // COMMITTED_PROCEDURAL_PRIMITIVE_HIT: 절차적 지오메트리 충돌
+	  // COMMITTED_NOTHING: 충돌 없음
+#else
+		// Software RT (wicked engine 에서 compute shader로 직접 구현한 BVH traversal, 10~100배 느림) 
+		RayHit hit = TraceRay_Closest(ray, push.instanceInclusionMask, rng);
+
+		if (hit.distance >= FLT_MAX - 1)
+#endif // RTAPI
+		{
+```
+
+- instanceInclusionMask
+
+// 예: 0xFF = 모든 인스턴스 포함 // 예: 0x01 = 첫 번째 레이어만 포함 (static geometry) // 예: 0xFE = 두 번째 레이어 제외 (동적 오브젝트 제외)
+
+- 하드웨어 RT
+    
+    전달받은 scene_acceleration_structure (tlas) 부터 시작해서 AABB 충돌테스트
+    
+- Software RT 구현
+    
+
+```c
+ // raytracingHF.hlsli:282+
+ // Software RT
+  inline RayHit TraceRay_Closest(RayDesc ray, uint mask, inout RNG rng) {
+      uint stack[RAYTRACE_STACKSIZE];  // BVH 순회용 스택
+
+      // BVH 루트부터 시작
+      stack[stackpos++] = 0;
+
+      do {
+          uint nodeIndex = stack[--stackpos];  // 스택에서 노드 팝
+          BVHNode node = bvhNodeBuffer.Load(nodeIndex);
+
+          if (IntersectNode(ray, node)) {      // AABB 충돌 체크
+              if (nodeIndex >= leafNodeOffset) {
+                  // 리프 노드: 삼각형 충돌 체크
+                  IntersectTriangle(ray, triangle);
+              } else {
+                  // 내부 노드: 자식들을 스택에 푸시
+                  stack[stackpos++] = node.left;
+                  stack[stackpos++] = node.right;
+              }
+          }
+      } while (stackpos > 0);
+  }
+```
+
+
+
+
+
 
 ### rayData.direction_distance 용도
 

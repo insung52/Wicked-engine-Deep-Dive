@@ -15,14 +15,6 @@
       "key": "ArrowDown"
     }
   ],
-  "markdown:toggle-preview": [
-    {
-      "modifiers": [
-        "Shift"
-      ],
-      "key": "Tab"
-    }
-  ],
   "obsidian-outliner:fold": [
     {
       "modifiers": [
