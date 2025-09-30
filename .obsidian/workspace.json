@@ -14,7 +14,7 @@
               "type": "markdown",
               "state": {
                 "file": "DDGI/DDGI.md",
-                "mode": "preview",
+                "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
@@ -183,8 +183,9 @@
   },
   "active": "74265a3cf2fbba29",
   "lastOpenFiles": [
-    "DDGI/DDGI.md",
     "voxelGI/voxelGI.md",
+    "voxelGI/image10.png",
+    "DDGI/DDGI.md",
     "20250926-0736-56.8672439.mp4",
     "voxelGI/image8.png",
     "voxelGI/image.png",

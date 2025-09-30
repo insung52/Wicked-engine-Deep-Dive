@@ -156,7 +156,7 @@ cascade blend factor : 현재 픽셀이 cascade 경계와 얼마나 가까운지
 
 픽셀 단위의 pseudo random noise 를 생성
 
-```glsl
+```c
 float hash(float x, float y) {
     return fract(sin(dot(vec2(x,y), vec2(12.9898,78.233))) * 43758.5453);
 }

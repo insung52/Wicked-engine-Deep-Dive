@@ -1,3 +1,5 @@
+![image.png](image10.png)
+
 # voxel GI
 
 # 0. 이론
@@ -40,7 +42,7 @@ Clipmap : 3d 공간을 다단계 해상도로 표현하는 텍스쳐 구조
 
 ## 간략한 Voxel GI pass 호출 과정
 
-```glsl
+```c
 // 매 프레임마다
   VXGI_Voxelize(scene, cmd);
   {
@@ -67,7 +69,7 @@ wicked engine 은 deferred rendering 이용 → G-buffer 응용
 - 예시: (64, 32, 127) - 64번째, 32번째, 127번째 복셀
 - gpu thread 병렬 처리시 사용 (12번 thread 가 1,0,6 위치의 복셀 담당)
     
-    ```glsl
+    ```c
     // cpu 에서 Dispatch
     // wiRenderer.cpp:9770, 9822, 9850
     device->Dispatch(scene.vxgi.res / 8, scene.vxgi.res / 8, scene.vxgi.res / 8, cmd);
@@ -138,7 +140,7 @@ offsetfromPrevFrame = (복셀단위로, 0, 0)  // 그리드가 시프트됨
 이전 프레임의 복셀 1 → 현재 프레임의 복셀 0에 대응
 이전 프레임의 복셀 2 → 현재 프레임의 복셀 1에 대응
 
-```glsl
+```c
 // wiScene.cpp:799-801
 // 1. 새로운 중심점 계산 (카메라 위치 기반)
 const float texelSize = clipmap.voxelsize * 2;
@@ -166,7 +168,7 @@ clipmap.center = center;
 - 호출
     1. 최상위 호출: wiRenderPath3D.cpp:1243
     
-    ```glsl
+    ```c
     // wiRenderPath3D.cpp:1239-1243
     if (wi::renderer::GetVXGIEnabled() && getSceneUpdateEnabled())
     {
@@ -179,7 +181,7 @@ clipmap.center = center;
     
     1. VXGI 복셀화 호출:
     
-    ```glsl
+    ```c
     // wiRenderer.cpp:9680-9800
     void VXGI_Voxelize(const Visibility& vis, CommandList cmd)
     {
@@ -219,7 +221,7 @@ clipmap.center = center;
     
     1. RenderMeshes 내부:
     
-    ```glsl
+    ```c
     // wiRenderer.cpp:668-669
     // Shader 선택 로직
     case RENDERPASS_VOXELIZE:
@@ -232,7 +234,7 @@ clipmap.center = center;
     
     VertexInput 구조체
     
-    ```glsl
+    ```c
     struct VertexInput  // objectHF.hlsli:118-209
       {
           uint vertexID : SV_VertexID;      // 현재 버텍스의 인덱스
@@ -244,7 +246,7 @@ clipmap.center = center;
     
 - surface 데이터 생성 및 출력 설정
     
-    ```glsl
+    ```c
     VSOut main(VertexInput input)
       {
           VertexSurface surface;
@@ -270,7 +272,7 @@ clipmap.center = center;
         - 법선 변환 로컬 → 월드
         - 모든 셰이더에서 동일한 방식으로 표면 속성 계산 (코드 재사용)
         
-        ```glsl
+        ```c
         struct VertexSurface  // objectHF.hlsli:212-222
           {
               float4 position;    // 월드 공간 위치
@@ -335,7 +337,7 @@ clipmap.center = center;
         
 - ~~위치 변환, 6축 투영~~ (생략)
     
-    ```glsl
+    ```c
     #ifndef VOXELIZATION_GEOMETRY_SHADER_ENABLED
     	Out.P = surface.position.xyz;
     
@@ -366,7 +368,7 @@ clipmap.center = center;
     
 - 출력: VSOut 구조체 (복셀화용)
     
-    ```glsl
+    ```c
     struct VSOut  // objectVS_voxelizer.hlsl:5-14
       {
           float4 pos : SV_POSITION;      // 클립 공간 위치
@@ -384,7 +386,7 @@ clipmap.center = center;
 
 - 입력
     
-    ```glsl
+    ```c
     struct GSInput
     {
     	float4 pos : SV_POSITION;
@@ -404,7 +406,7 @@ clipmap.center = center;
     
 - 지배적 축 계산
     
-    ```glsl
+    ```c
     	float3 facenormal = abs(input[0].nor + input[1].nor + input[2].nor);
     	// 삼각형 법선들의 평균 절댓값
     	uint maxi = facenormal[1] > facenormal[0] ? 1 : 0;
@@ -414,7 +416,7 @@ clipmap.center = center;
     
 - ~~삼각형 AABB 계산~~ - 사용 안됨
     
-    ```glsl
+    ```c
     	float3 aabb_min = min(input[0].pos.xyz, min(input[1].pos.xyz, input[2].pos.xyz));
     	float3 aabb_max = max(input[0].pos.xyz, max(input[1].pos.xyz, input[2].pos.xyz));
     	// Conservative Rasterization용 삼각형 경계 박스
@@ -422,7 +424,7 @@ clipmap.center = center;
     
 - 각 정점 변환
     
-    ```glsl
+    ```c
     GSOutput output[3];
     
     	uint i = 0;
@@ -447,7 +449,7 @@ clipmap.center = center;
     
 - ~~Conservative Rasterization~~ (옵션, 주석처리됨)
     
-    ```glsl
+    ```c
     #ifdef VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED
     	// Expand triangle to get fake Conservative Rasterization:
     	// 삼각형을 약간 확장해서 더 많은 픽셀 커버
@@ -463,7 +465,7 @@ clipmap.center = center;
     
 - 최종 변환 및 출력
     
-    ```glsl
+    ```c
     	for (i = 0; i < 3; ++i)
     	{
     		// 복셀 그리드 → 클립 공간
@@ -517,7 +519,7 @@ clipmap.center = center;
 
 - 입력
     
-    ```glsl
+    ```c
     struct PSInput
     {
     	float4 pos : SV_POSITION;  // 래스터화로 선택된 가상의 픽셀(복셀) 좌표, 사용 안함
@@ -545,7 +547,7 @@ clipmap.center = center;
         
         초기 설정 및 클립 테스트 (objectPS_voxelizer.hlsl:64-87)
         
-        ```glsl
+        ```c
         void main(PSInput input)
         {
         	ShaderMaterial material = GetMaterial();
@@ -560,7 +562,7 @@ clipmap.center = center;
         
         world_to_clipmap 함수 (ShaderInterop_VXGI.h:38-43):
         
-        ```glsl
+        ```c
         
           float3 world_to_clipmap(in float3 P, in VoxelClipMap clipmap)
           {
@@ -574,7 +576,7 @@ clipmap.center = center;
         
         ~~보존적 래스터화 검사 (objectPS_voxelizer.hlsl:76-87)~~
         
-        ```glsl
+        ```c
         #ifdef VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED  
         // 보존적 레스터화. 삼각형 내부에 픽셀 중심이 들어가지 않더라도 겹치면 그림
         uint3 clipmap_pixel = uvw * GetFrame().vxgi.resolution;  // 내림 연산 ex. 38.7 -> 38
@@ -602,7 +604,7 @@ clipmap.center = center;
         
         머티리얼 데이터 수집 (objectPS_voxelizer.hlsl:89-122)
         
-        ```glsl
+        ```c
         // 기본색 샘플링
         float4 baseColor = input.color;  // VS 에서 전달 받은 버텍스 색상
         if (material.textures[BASECOLORMAP].IsValid()) {
@@ -623,7 +625,7 @@ clipmap.center = center;
         
         조명 계산 (objectPS_voxelizer.hlsl:113-127)
         
-        ```glsl
+        ```c
         float3 N = normalize(input.N);
         
         // 간단한 조명 모델 (복셀화용)
@@ -645,7 +647,7 @@ clipmap.center = center;
             
             lighting 구조체
             
-            ```glsl
+            ```c
             struct LightingPart {
                   half3 diffuse;   // RGB 확산 반사 (Lambert 반사)
                   half3 specular;  // RGB 정반사 (Phong/Blinn-Phong 반사)
@@ -674,7 +676,7 @@ clipmap.center = center;
             
             surface 구조체
             
-            ```glsl
+            ```c
             1. 기본 기하학적 속성
             
               struct Surface {
@@ -741,7 +743,7 @@ clipmap.center = center;
             
             주요 함수들
             
-            ```glsl
+            ```c
             1. init() 함수 (surfaceHF.hlsli:126-183)
             
               inline void init()
@@ -836,7 +838,7 @@ clipmap.center = center;
             - ForwardLighting 함수는 현대 PBR 렌더링의 모든 조명 효과를 계산할 수 있지만, 복셀화에서는 간단한 조명 계산만 수행
             - 복셀화에서 작동 : 복셀 GI의 1차 바운스 조명 데이터를 정확하고 효율적으로 생성
                 
-                ```glsl
+                ```c
                 // shadingHF.hlsli:111-165 중 이 부분만 실행
                   [branch]
                   if (any(xForwardLightMask))
@@ -873,7 +875,7 @@ clipmap.center = center;
                 
                 xForwardLightMask : Forward Rendering 에서 광원 컬링을 위한 비트마스크
                 
-                ```glsl
+                ```c
                 CBUFFER(ForwardEntityMaskCB, CBSLOT_RENDERER_FORWARD_LIGHTMASK)
                   {
                       uint2 xForwardLightMask;    // supports indexing 64 lights
@@ -884,7 +886,7 @@ clipmap.center = center;
                 
                 32개 씩 2개 버킷으로 분할
                 
-                ```glsl
+                ```c
                 // xForwardLightMask[0]: 광원 0-31 (32개)
                 // xForwardLightMask[1]: 광원 32-63 (32개)
                 
@@ -895,7 +897,7 @@ clipmap.center = center;
                 
                 CPU 에서 light culling 후 마스크 생성
                 
-                ```glsl
+                ```c
                 ForwardEntityCullingCPU 함수 (wiRenderer.cpp:3021-3082)
                 
                   ForwardEntityMaskCB ForwardEntityCullingCPU(const Visibility& vis, const AABB& batch_aabb, RENDERPASS renderPass)
@@ -933,7 +935,7 @@ clipmap.center = center;
                     
                     InstancedBatch 구조체 (wiRenderer.cpp:3143-3152)
                     
-                    ```glsl
+                    ```c
                     struct InstancedBatch
                     {
                       uint32_t meshIndex = ~0u;              // 메쉬 인덱스
@@ -965,7 +967,7 @@ clipmap.center = center;
                 
                 1. Directional Light
                 
-                ```glsl
+                ```c
                 // lightingHF.hlsli:51-xx에서 실행
                   inline void light_directional(in ShaderEntity light, in Surface surface, inout Lighting lighting)
                   {
@@ -990,7 +992,7 @@ clipmap.center = center;
                 
                 1. Point Light
                 
-                ```glsl
+                ```c
                 inline void light_point(in ShaderEntity light, in Surface surface, inout Lighting lighting)
                   {
                       float3 L = light.position - surface.P;   // 표면에서 광원으로의 벡터
@@ -1019,7 +1021,7 @@ clipmap.center = center;
         
         복셀 좌표 계산 (objectPS_voxelizer.hlsl:130-132)
         
-        ```glsl
+        ```c
         uint3 writecoord = floor(uvw * GetFrame().vxgi.resolution);
         writecoord.z *= VOXELIZATION_CHANNEL_COUNT;  // 하나의 복셀을 13개 슬라이스로 분할
         ```
@@ -1033,7 +1035,7 @@ clipmap.center = center;
         
         방향성 데이터 저장
         
-        ```glsl
+        ```c
         // objectPS_voxelizer.hlsl:156-225
         // 방향별 오프셋 계산
         // 법선 방향(aniso_direction)에 따라 6개 면 중 어느 면에 데이터를 저장할지 결정
@@ -1070,7 +1072,7 @@ clipmap.center = center;
         
         - InterlockedAdd
             
-            ```glsl
+            ```c
             // 하드웨어 지원
             void InterlockedAdd(  
                 in out dest,     // 대상 메모리 위치  
@@ -1092,7 +1094,7 @@ clipmap.center = center;
 - objectPS_voxelizer 는 일반적인 render target 출력이 없다. (void main)
 - 3D 텍스처에 atomic 연산으로 직접 복셀의 lighting 정보를 기록함!
     
-    ```glsl
+    ```c
     // wiRenderer.cpp:9794
       device->RenderPassBegin(nullptr, 0, cmd, RenderPassFlags::ALLOW_UAV_WRITES);
       //                     ↑ render target 없음
@@ -1114,7 +1116,7 @@ clipmap.center = center;
     정점B: 월드좌표 (12, 5, 8), 법선 (0, 0, 1), 색상 (1, 0, 0)
     정점C: 월드좌표 (11, 7, 8), 법선 (0, 0, 1), 색상 (1, 0, 0)
     
-    ```glsl
+    ```c
     // Surface 생성 (Material 적용)
     surface.create(material, input);
     // → 정점 색상 × Material 색상 = 최종 색상
@@ -1134,7 +1136,7 @@ clipmap.center = center;
     입력: VS에서 온 삼각형 1개
     3개 정점 모두 법선이 (0, 0, 1) → Z축 방향
     
-    ```glsl
+    ```c
     // 1. 지배적 축 계산
     float3 facenormal = abs((0,0,1) + (0,0,1) + (0,0,1)) = (0,0,3)
     maxi = 2  // Z축이 가장 지배적
@@ -1169,7 +1171,7 @@ clipmap.center = center;
     
     예시: 복셀 좌표 (32, 30, 2)
     
-    ```glsl
+    ```c
     // 1. 복셀 위치 계산
     uint3 writecoord = (32, 30, 2)
     writecoord.z *= 13  // 13개 채널로 확장 → (32, 30, 26)
@@ -1219,7 +1221,7 @@ clipmap.center = center;
 
 각 복셀마다 실행
 
-```glsl
+```c
 // (vxgi_temporalCS.hlsl)
 Texture3D<half4> input_previous_radiance : register(t0);
 Texture3D<uint> input_render_atomic : register(t1);
@@ -1430,7 +1432,7 @@ output_sdf: 거리 필드 데이터
 1. SDF  텍스쳐 빈공간 채우기 (Jump Flood 알고리즘 활용)
 2. 각 복셀은 기본적으로 면 6개 방향 + 16개 cone 방향 존재
 	![image.png](image5.png)
-	```glsl
+	```c
     static const int DIFFUSE_CONE_COUNT = 16;  // 32 개도 선택 가능
     static const float DIFFUSE_CONE_APERTURE = 0.872665f;
     
@@ -1530,7 +1532,7 @@ Jump Flood Algorithm 을 이용해, 각 복셀에서 가장 가까운 표면까�
 │2 │1 │0 │1 │2 │
 └─┴─┴─┴─┴─┘
 
-```glsl
+```c
 // wiRenderer.cpp의 VXGI_Voxelize 함수
   {
       device->EventBegin("SDF Jump Flood", cmd);
@@ -1560,7 +1562,7 @@ Jump Flood Algorithm 을 이용해, 각 복셀에서 가장 가까운 표면까�
   }
 ```
 
-```glsl
+```c
 // vxgi_sdf_jumpfloodCS.hlsl
 Texture3D<float> input_sdf : register(t0);
 
@@ -1625,7 +1627,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
     - 16개 cone 방향 중 법선과 내적이 양수인 cone 에 대해 ConeTrace
     
-    ```glsl
+    ```c
     // voxels:			3D Texture containing voxel scene with direct diffuse lighting (or direct + secondary indirect bounce)
     // P:				world-space position of receiving surface (수신 표면의 월드 좌표)
     // N:				world-space normal vector of receiving surface (수신 표면의 법선 벡터)
@@ -1663,7 +1665,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
     ConeTraceSpecular(voxelConeTracingHF.hlsli:155)
     
-    ```glsl
+    ```c
     inline float4 ConeTraceSpecular(in Texture3D<half4> voxels, in float3 P, in float3 N, in float3 V, in float roughness, in uint2 pixel)
     {
     	// roughness(거칠기)를 cone 각도로 사용
@@ -1691,7 +1693,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     - cone 원거리에서 겹치는 여러 복셀들의 경우 : lod 를 통해 더 큰 복셀을 선택
     - 겹치는 모든 복셀을 찾지 않고, 대표 지점 하나만 샘플링
     
-    ```glsl
+    ```c
     // coneDirection:	world-space cone direction in the direction to perform the trace
     // coneAperture:	cone width
     // precomputed_direction : avoid 3x anisotropic weight sampling, and instead directly use a slice that has precomputed cone direction weighted data
@@ -1799,7 +1801,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
     - cone 이 진행하면서 도달한 특정 위치에서, 주변 8개 복셀들 샘플링
     
-    ```glsl
+    ```c
     // voxelConeTracingHF.hlsli:7
     inline float4 SampleVoxelClipMap(in Texture3D<half4> voxels, in float3 P, in uint clipmap_index, float step_dist, in float3 face_offsets, in float3 direction_weights, uint precomputed_direction = 0)
     {
@@ -1860,7 +1862,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
         
         Cone 방향: (0.6, -0.4, 0.8)
         
-        ```glsl
+        ```c
         coneDirection = (0.6, -0.4, 0.8)
         aniso_direction = -(0.6, -0.4, 0.8) = (-0.6, 0.4, -0.8)
         
@@ -1878,7 +1880,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
         
         tc 좌표가 (0.3, 0.45, 0.2)인 경우
         
-        ```glsl
+        ```c
         // 첫 번째 샘플링: -X 방향
         tc1 = (0.3 + 0.045, 0.45, 0.2) = (0.345, 0.45, 0.2)
         sam1 = voxels.SampleLevel(sampler, tc1, 0)  // -X 방향의 radiance
@@ -1894,7 +1896,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
         
         가중 평균 계산
         
-        ```glsl
+        ```c
         sam = sam1 * 0.6 + sam2 * 0.4 + sam3 * 0.8
         ```
         
@@ -1923,7 +1925,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
     화면 각 픽셀에 대해 실시간 Diffuse Cone Tracing 을 수행 - 간접 조명 계산
     
-    ```glsl
+    ```c
     // vxgi_resolve_diffuseCS
     PUSHCONSTANT(postprocess, PostProcess);
     
@@ -1955,7 +1957,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
 - Specular 간접 조명 계산 vxgi_resolve_specularCS.hlsl
     
-    ```glsl
+    ```c
     // vxgi_resolve_specularCS.hlsl
     PUSHCONSTANT(postprocess, PostProcess);
     
@@ -1986,7 +1988,7 @@ void main(uint3 DTid : SV_DispatchThreadID)  // 모든 복셀에서 실행
     
     specular 계산은 Editor 의 VXGI Reflecitons 옵션으로 제어됨
     
-    ```glsl
+    ```c
     wiRenderer.cpp:9946-9949에서:
     
       if(VXGI_REFLECTIONS_ENABLED)  // ← 여기서 옵션 체크!
@@ -2009,7 +2011,7 @@ vxgi_resolve_specularCS → specular_indirect_texture (화면 해상도)
 
 Lighting Pass에서 사용
 
-```glsl
+```c
 // 실제 lighting pass 셰이더에서
 float4 lighting_pass_main(...)
 	{

@@ -1,23 +1,4 @@
-렌더러에 ddgi update
-
-scene 내용물 바뀌었을 때만 호출?
-
-updateRaytracingBVH
-
-이것도 바뀌었을때만?
-
-해당 bvh 업데이트할때 blas 도 업데이트?
-
-blas 각각 어디에 저장되는지?
-
-objectcomponent?
-
-
-
-
-# DDGI 호출
-
-## ddgi update
+## ddgi update (9/30)
 
 scene 에 변화가 없더라도 매 프레임 DDGI 호출
 
@@ -50,12 +31,13 @@ void DDGI(const wi::scene::Scene& scene, CommandList cmd)
   if (wi::jobsystem::IsBusy(raytracing_ctx))
 	  return;  // Ray tracing이 아직 처리 중이면 스킵
 
-  // 실제 DDGI 업데이트 수행
+  // 이후 DDGI 업데이트 수행 (ray tracing, sh)
 }
 ```
 
-
-
+scene 변화가 없는 정적인 환경에서는 inconsistency 매우 감소 
+-> 각 probe의 ray 개수 감소 (최소 4개)
+- inconsistency 를 감지하기 위해서 ray 개수 최소값 보장장
 
 
 
@@ -76,7 +58,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
     
     1. 씬 bounds 계산
     
-    ```glsl
+    ```c
     // wiScene.cpp:630-637
     float3 grid_min = bounds.getMin();  // 씬의 최소 좌표
     grid_min.x -= 1; grid_min.y -= 1; grid_min.z -= 1;  // 여유 공간
@@ -87,7 +69,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
     - bounds.getMin(), getMax()
         1. 개별 Object AABB 계산
         
-        ```glsl
+        ```c
         // wiScene.cpp:4401-4404
         // 각 오브젝트마다
         const MeshComponent& mesh = *meshes.GetComponent(object.meshID);
@@ -103,7 +85,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
             - 결과: 월드 좌표계의 Object AABB
         1. 병렬 AABB 병합 
         
-        ```glsl
+        ```c
         // wiScene.cpp:4679-4687
         // 병렬 처리로 그룹별 AABB 계산
         AABB& shared_bounds = parallel_bounds[args.groupID];
@@ -116,7 +98,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
         
         2. 최종 Scene AABB 계산 
         
-        ```glsl
+        ```c
         // wiScene.cpp:411-415
         bounds = AABB();  // 빈 AABB로 초기화
         	for (auto& group_bound : parallel_bounds) {
@@ -126,7 +108,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
         
     1. 점진적 블렌딩 
     
-    ```glsl
+    ```c
     // wiScene.cpp:644-645
     float bounds_blend = 0.01f;  // 1% 씩 천천히 조정
     ddgi.grid_min = wi::math::Lerp(ddgi.grid_min, grid_min, bounds_blend);
@@ -137,7 +119,7 @@ atlas - 여러 텍스쳐를 한 파일로 저장
     
     probe 배치 
     
-    ```glsl
+    ```c
     // wiScene.cpp:640-643
     if (ddgi.frame_index == 0 || area < 0.001f) {
     	bounds_blend = 1;  // 첫 프레임은 즉시 조정
@@ -156,7 +138,7 @@ ddgi_rayallocationCS.hlsl 에서 probe 의 중요도에 따라 해당 probe 에 
 - 할당 기준
     1. Inconsistency (불일치도)
         
-        ```glsl
+        ```c
         // Line 25-27: 각 프로브의 inconsistency 값 확인
         inconsistency = max(inconsistency, varianceBuffer[...].inconsistency);
         
@@ -174,7 +156,7 @@ ddgi_rayallocationCS.hlsl 에서 probe 의 중요도에 따라 해당 probe 에 
         
     2. 카메라 프러스텀
         
-        ```glsl
+        ```c
         // Line 52-55: 카메라 시야 밖 프로브는 ray 개수 10% 감소
           if (!GetCamera().frustum.intersects(sphere))
           {
@@ -184,7 +166,7 @@ ddgi_rayallocationCS.hlsl 에서 probe 의 중요도에 따라 해당 probe 에 
         
     3. 제약 조건들
         
-        ```glsl
+        ```c
         	// Line 57-58: 정렬 및 범위 제한
           rayCount = align(rayCount, DDGI_RAY_BUCKET_COUNT);  // 4의 배수 단위 정렬
           rayCount = clamp(rayCount, DDGI_RAY_BUCKET_COUNT, DDGI_MAX_RAYCOUNT);  // 최소-최대 범위
@@ -203,7 +185,7 @@ ddgi_rayallocationCS.hlsl 에서 probe 의 중요도에 따라 해당 probe 에 
 
 ray 방향 결정 : Spherical Fibonacci + 매 프레임 랜덤하게 회전
 
-```glsl
+```c
 Spherical Fibonacci:
 float3 spherical_fibonacci(float i, float n)
 {
@@ -220,7 +202,7 @@ return float3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
 
 - 매 프레임 회전: random_orientation 행렬로 패턴 변경
 
-```glsl
+```c
 // wiRenderer.cpp:12172-12181
 // 랜덤 파라미터 생성
 float angle = wi::random::GetRandom(0.0f, 1.0f) * XM_2PI;  // 0~2π 랜덤 각도
@@ -242,7 +224,7 @@ device->BindDynamicConstantBuffer(cb, CB_GETBINDSLOT(MiscCB), cmd);
 
 따라서 해상도에 제약 없이 모든 방향으로 raytracing 가능
 
-```glsl
+```c
 // ddgi_raytraceCS.hlsl:52
 // 1. 각 프로브에서 구 방향으로 광선 발사 (Spherical Fibonacci 분포 사용 -> 구 표면에 균일한 랜덤 방향)
 const float3 raydir = normalize(mul(random_orientation, spherical_fibonacci(rayIndex, rayCount)));
@@ -298,7 +280,7 @@ probe 에서 광선 발사
 
 1. 초기화
     
-    ```glsl
+    ```c
     // ddgi_raytraceCS.hlsl:52
     float3 radiance = 0;  // 최종 radiance 값
     const float3 raydir = normalize(mul(random_orientation, spherical_fibonacci(rayIndex, rayCount)));
@@ -306,7 +288,7 @@ probe 에서 광선 발사
     
 2. Direct Light Sampling
     
-    ```glsl
+    ```c
     // ddgi_raytraceCS.hlsl:64
     // 정적 조명들로부터 직접 조명 계산
       const uint light_index = lights().first_item() + rng.next_uint(light_count);
@@ -328,7 +310,7 @@ probe 에서 광선 발사
     
 3. Primary Ray Tracing
     
-    ```glsl
+    ```c
     RayDesc ray;
       ray.Origin = probePos;        // 프로브 위치에서 시작
       ray.Direction = raydir;       // Fibonacci 방향
@@ -348,7 +330,7 @@ probe 에서 광선 발사
     
 4. Surface Hit 처리
     
-    ```glsl
+    ```c
     if (hit) {
           // Surface 정보 로드
           surface.load(hit.primitiveID, hit.bary);
@@ -373,34 +355,49 @@ probe 에서 광선 발사
           radiance += hit_result;
       }
     ```
-    
-
-[raytracing 가속 구조](https://www.notion.so/raytracing-269f4fd401a4804ebd3df1e3680bf4ff?pvs=21)
+### raytracing 가속 구조 (9/30)
 
 하드웨어 RT 호출시에 scene_acceleration_structure 을 파라미터로 사용합니다.
-
 각 메시들은 변형시에만 blas 를 재구성하고,
-
 tlas 의 경우 매 프레임 메시들의 움직임을 추적해서 재구성합니다.
-
-### raytracing 가속 구조
 
 BVH (Bounding Volume Hierarchy) 구조:
 
-TLAS Root ├── Instance A (Car) │ └── BLAS A │ ├── BV: Wheels │ │ ├── Triangle 1,2,3... │ └── BV: Body │ ├── Triangle 100,101... ├── Instance B (Building) │ └── BLAS B │ ├── BV: Floor │ └── BV: Walls
+TLAS Root 
+├── Instance A (Car) 
+│ └── BLAS A 
+│     ├── BV: Wheels 
+│     │ ├── Triangle 1,2,3... 
+│     └── BV: Body 
+│         ├── Triangle 100,101... 
+├── Instance B (Building) 
+│ └── BLAS B 
+│     ├── BV: Floor 
+│     └── BV: Walls
 
 BLAS (Bottom Level AS)
 - MeshComponent 내부에 저장
+- 인스턴스 공유 / 복사
 ```c
 // wiScene_Components.h:758
+// MeshComponent : 공유되는 메시 데이터
 struct MeshComponent {
   wi::vector<wi::graphics::RaytracingAccelerationStructure> BLASes; // one BLAS per LOD
   // lod 에 따라 디테일 차이
   mutable BLAS_STATE BLAS_state = BLAS_STATE_NEEDS_REBUILD;
+  
+  wi::graphics::GPUBuffer streamoutBuffer; // 애니메이션 데이터
+
+  // 버퍼 내 섹션들
+  BufferView so_pos;  // 현재 위치
+  BufferView so_pre;  // 이전 위치
+  BufferView so_nor;  // 노말
+  BufferView so_tan;  // 탄젠트
   // ... 기타 메시 데이터
 };
 ```
 - Scene의 ComponentManager 에서 관리
+
 ```c
 // wiScene.h:35
 class Scene {
@@ -409,9 +406,11 @@ class Scene {
   // 각 MeshComponent가 자체 BLAS들을 포함
 };
 ```
+
+
 - 구조적 계층:
   Scene
-  └── ComponentManager<MeshComponent> meshes
+  └── ComponentManager< MeshComponent > meshes
       └── Entity 1: MeshComponent
           └── BLASes[0] (LOD 0)
           └── BLASes[1] (LOD 1)
@@ -420,11 +419,11 @@ class Scene {
       └── Entity 2: MeshComponent
           └── BLASes[0]
           └── BLAS_state
-      └── ...
+      └── 
 
 
 ```c
-// 각 메시별로 생성, 동일 메시들의 경우 1개 blas 를 공유(참조)
+// 각 메시별로 생성, 동일 메시들의 경우 원본 blas를 복사 (공유 x, 각 인스턴스가 다른 애니메이션을 할 수 있으므로)
   for (각 메시) {
       BLAS blas;
       blas.geometryDesc = {
@@ -505,9 +504,50 @@ blas 업데이트 (메시가 변형될 때만 업데이트)
 
 - NEEDS_REBUILD: 메시 지오메트리가 완전히 바뀜 (새 정점/삼각형)
     - BVH 구조 완전 재구축
+    - 메시 생성/초기화 시
+    - 지오메트리 플래그 변경 시
 - NEEDS_REFIT: 정점 위치만 바뀜 (애니메이션, 스키닝)
     - 기존 BVH 구조 유지, 바운딩 박스만 업데이트
+    - 삼각형 추가/제거 불가 - 버텍스 위치만 수정 가능
+    - Streamout Buffer 존재 시
+	    - 스켈레탈 애니메이션 -> 버텍스 위치 변경
+	    - Morph Targets 로 형태 변경
+	    - GPU 버텍스 변형 후 결과를 Streamout buffer 에 저장
 - COMPLETE: 변화 없음 → 스킵 (성능 최적화)
+
+변형 감지 매커니즘
+A. 정적 메시 (Static Mesh):
+- streamoutBuffer 없음 → BLAS_STATE_COMPLETE (변형 없음)
+
+B. 동적 메시 (Dynamic Mesh):
+- streamoutBuffer 존재 → BLAS_STATE_NEEDS_REFIT (매 프레임 refit 고정)
+
+C. 지오메트리 변경:
+- 플래그 변경 감지 → BLAS_STATE_NEEDS_REBUILD (완전 재구축)
+
+#streamoutBuffer
+- GPU에서 버텍스를 변형한 결과를 저장하는 출력 버퍼 (GPU 애니메이션 결과 저장소)
+- 생성 조건
+	- skeletal Animation : vertex_boneindices 존재 (본 애니메이션)
+	- Morph Target Animation : morph_targets 존재 (블렌드셰이프)
+- 버퍼 구조
+```c
+//wiScene_Components.cpp:1396-1401
+desc.size =
+  AlignTo(vertex_positions.size() * sizeof(Vertex_POS32W), alignment) + // 현재 위치
+  AlignTo(vertex_positions.size() * sizeof(Vertex_POS32W), alignment) + // 이전 위치 (motion
+vector용)
+  AlignTo(vertex_normals.size() * sizeof(Vertex_NOR), alignment) +      // 노말
+  AlignTo(vertex_tangents.size() * sizeof(Vertex_TAN), alignment);      // 탄젠트
+
+4개 섹션으로 구성:
+- so_pos: 변형된 현재 버텍스 위치
+- so_pre: 이전 프레임 버텍스 위치 (Motion Vector 계산용)
+- so_nor: 변형된 노말
+- so_tan: 변형된 탄젠트
+```
+
+BLAS 재구성
 
 ```c
 // wiRenderer.cpp:5607+ - 매 프레임
@@ -632,7 +672,7 @@ tlas 업데이트 (씬 전체)
     - probe 에서 ray 의 hit point 까지의 거리 (miss 일 경우 최대 거리)
 2. Probe Offset 계산
     
-    ```glsl
+    ```c
     // ddgi_updateCS.hlsl:131
     if (depth < probeOffsetDistance) {
     	probeOffsetNew -= ray.direction * (probeOffsetDistance - depth);
@@ -645,7 +685,7 @@ tlas 업데이트 (씬 전체)
     - Visibility 가중치 계산
         - Backface: 표면 뒤쪽 프로브 무시 (weight 감소)
         
-        ```glsl
+        ```c
         // ShaderInterop_DDGI.h:217-218
           half3 probe_to_point = P - probe_pos + N * 0.001;  // Normal bias
           half3 dir = normalize(-probe_to_point);
@@ -666,7 +706,7 @@ tlas 업데이트 (씬 전체)
         
         - Occlusion: 장애물로 가려진 프로브 weight 감소
         
-        ```glsl
+        ```c
         // ShaderInterop_DDGI.h:260-274
           // Fragment에서 프로브까지의 거리 계산
           half dist_to_probe = distance(P, probe_pos);
@@ -710,7 +750,7 @@ tlas 업데이트 (씬 전체)
             
             즉 깊이 값이 평균보다 멀리 떨어져 있을수록 확률이 점차 작아짐
             
-            ```glsl
+            ```c
             // ShaderInterop_DDGI.h:273
               weight *= (dist_to_probe <= mean) ? 1.0 : chebyshev_weight;
               // 평균보다 t 가 클때만 chebyshev 사용 (확실한 가시성은 보존)
@@ -723,13 +763,13 @@ tlas 업데이트 (씬 전체)
 
 ddgi.depth_texture 에 각 probe 마다 n*n 크기의 픽셀 받음 (RESOLUTION)
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:9-10
   static const uint DDGI_DEPTH_RESOLUTION = 16;  // 16x16 per probe
   static const uint DDGI_DEPTH_TEXELS = 18;      // 18x18 with border
 ```
 
-```glsl
+```c
 // ddgi_updateCS.hlsl:100-160
 // 각 텍셀마다 실행
 	const float3 texel_direction = decode_oct((((GTid.xy % RESOLUTION) + 0.5) / (float2)RESOLUTION) * 2 - 1);
@@ -754,7 +794,7 @@ ddgi.depth_texture 에 각 probe 마다 n*n 크기의 픽셀 받음 (RESOLUTION)
 
 1. Radiance 블렌딩 (Texel 단위)
 
-```glsl
+```c
 // ddgi_updateCS.hlsl:210
 if (GTid.x < DDGI_COLOR_RESOLUTION && GTid.y < DDGI_COLOR_RESOLUTION)  // 16x16 텍셀 각각
   {
@@ -797,7 +837,7 @@ radiance 텍스쳐 형식 (shared_texels)
 - probe 마다 8x8 = 64 텍셀
 - RGBE 포맷으로 packed 저장(int4)
     
-    ```glsl
+    ```c
     // PixelPacking_RGBE.hlsli:23
     // RGBE = RGB + Exponent (32bit 압축)
       // R(8bit) + G(8bit) + B(8bit) + E(8bit) = 32bit
@@ -836,7 +876,7 @@ Phase 1: Write (64 threads) → shared_texels[0~63]
 Phase 2: Barrier
 Phase 3: Read (1 thread) → shared_texels[0~63]
 
-```glsl
+```c
 // ShaderInterop_DDGI.hlsl:86
 struct DDGIVarianceData { // 텍셀별
 float3 mean;           // (여러 프레임에서) 평균 radiance (RGB)  첫번째 ray tracing 결과
@@ -856,7 +896,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     - 초기값 : 0
     - 신호 대 잡음비에 따른 블렌딩 속도 조절에 사용
     
-    ```glsl
+    ```c
     // ShaderInterop_DDGI.hlsl:505-507, 513
       // - 높은 SNR (신호 강함, 노이즈 적음) → 빠른 블렌딩
       // - 낮은 SNR (신호 약함, 노이즈 많음) → 느린 블렌딩
@@ -874,7 +914,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
 - variance : 분산, 노이즈 측정
     - 초기값 : (0,0,0)
     
-    ```glsl
+    ```c
     // ShaderInterop_DDGI.hlsl:483-487 - Firefly 억제
       float3 dev = sqrt(max(1e-5, variance));
       float3 highThreshold = 0.1 + shortMean + dev * 8;
@@ -893,7 +933,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     - 최소 불일치 : 0
     - 조명 환경의 변화 정도를 정량화
     
-    ```glsl
+    ```c
     // ShaderInterop_DDGI.hlsl:501-503
       float relativeDiff = dot(rgb_weights, abs(shortDiff) / max(1e-5, dev));
       inconsistency = lerp(inconsistency, relativeDiff, 0.08);
@@ -913,7 +953,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     초기 상황 설정:
     
-    ```glsl
+    ```c
     // 입력값 예시
     float3 y = (0.8, 0.6, 0.4);          // 현재 프레임 새로운 radiance
     float3 mean = (0.5, 0.3, 0.2);       // 장기 평균 (여러 프레임 누적)
@@ -925,7 +965,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 1: Firefly 억제 (이상치 제거)
     
-    ```glsl
+    ```c
     // 분산에서 표준편차 계산
     float3 dev = sqrt(max(1e-5, variance)) = sqrt((0.01, 0.02, 0.015)) = (0.1, 0.14, 0.12);
     
@@ -974,7 +1014,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 2: 단기 평균 업데이트
     
-    ```glsl
+    ```c
     // 업데이트 전 차이 계산
     float3 delta = y - shortMean = (0.8, 0.6, 0.4) - (0.6, 0.4, 0.3) = (0.2, 0.2, 0.1);
     
@@ -993,7 +1033,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 3: 분산 업데이트
     
-    ```glsl
+    ```c
     // 분산 블렌딩 비율 (단기 평균의 절반, 4%)
     float varianceBlend = 0.08 * 0.5 = 0.04;
     
@@ -1030,7 +1070,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 4: 불일치도 계산
     
-    ```glsl
+    ```c
     // 장기-단기 평균 차이
     float3 shortDiff = mean - shortMean = (0.5, 0.3, 0.2) - (0.616, 0.416, 0.308) = (-0.116, -0.116, -0.108);
     
@@ -1065,7 +1105,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 5: 신호 대 잡음비 기반 블렌딩 계수
     
-    ```glsl
+    ```c
     // SNR(Signal-to-Noise Ratio) 기반 블렌딩 감소율 계산
     float varianceBasedBlendReduction = clamp(
     dot(float3(0.299, 0.587, 0.114), 0.5 * shortMean / max(1e-5, dev)),
@@ -1103,7 +1143,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 6: 적응적 블렌딩 계수 계산
     
-    ```glsl
+    ```c
     // 변화량과 불일치도에 따른 적응적 블렌딩
     float3 catchUpBlend = clamp(
     smoothstep(0, 1, relativeDiff * max(0.02, inconsistency - 0.2)),
@@ -1143,7 +1183,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     STEP 7: 최종 업데이트
     
-    ```glsl
+    ```c
     // vbbr (SNR) 업데이트
     vbbr = lerp(vbbr, varianceBasedBlendReduction, 0.1)
     = lerp(0.7, 1.0, 0.1)
@@ -1162,7 +1202,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
     
     결과 요약:
     
-    ```glsl
+    ```c
     // 최종 상태:
     mean = (0.5105, 0.3105, 0.207);     // 장기 평균 (약간 증가)
     shortMean = (0.616, 0.416, 0.308);  // 단기 평균 (빠르게 증가)
@@ -1175,7 +1215,7 @@ float inconsistency;   // 불일치도 (probe 의 ray 개수 할당에 사용)
 
 blending 수식
 
-```glsl
+```c
 // ShaderInterop_DDGI.hlsl:469
 void MultiscaleMeanEstimator(
 	float3 y,  // 새로운 radiance
@@ -1240,7 +1280,7 @@ void MultiscaleMeanEstimator(
 
 SH 계산 수식
 
-```glsl
+```c
 // SH_Lite.hlsli:59
 // 정규화 상수들
   static const half SqrtPi = 1.77245385090551602729;
@@ -1272,7 +1312,7 @@ SH 계산 수식
   // ... (더 있음)
 ```
 
-```glsl
+```c
  // SH_Lite.hlsli:693
  // 실제 투영
   L1_RGB ProjectOntoL1_RGB(half3 direction, half3 value) {
@@ -1358,7 +1398,7 @@ probe 단위, ray 단위 dispatch
 
 1. Depth 레벨 블렌딩
 
-```glsl
+```c
 // ddgi_updateCS.hlsl:168-172 (Depth 업데이트)
   const float2 prev_result = output[pixel_current].xy;
   if (push.frameIndex > 0) {
@@ -1383,7 +1423,7 @@ octahedral mapping : n*n 2차원 좌표 → 구 형태 3차원 방향 변환
 
 해당 텍셀의 3차원 방향, 텍셀의 radiance 값 → SH projection
 
-```glsl
+```c
 // 첫 번째 스레드만 실행 (누적 합산 필요)
 if(groupIndex == 0) {
 // 각 SH 레벨별 계산 (L0~L4)
@@ -1410,7 +1450,7 @@ if (push.shLevel == 1) {
 
 SH Projection 함수의 구현
 
-```glsl
+```c
 // SH_Lite.hlsli:693
 L1_RGB ProjectOntoL1_RGB(half3 direction, half3 value) {
 	L1_RGB sh;
@@ -1438,7 +1478,7 @@ octahedral mapping
 
 1. Fragment shader에서는 다음과 같이 DDGI를 호출 
 
-```glsl
+```c
 // shadingHF.hlsli:105
 if (!surface.IsGIApplied() && GetScene().ddgi.probe_buffer >= 0) {
 	lighting.indirect.diffuse = ddgi_sample_irradiance(
@@ -1452,7 +1492,7 @@ if (!surface.IsGIApplied() && GetScene().ddgi.probe_buffer >= 0) {
 
 1. 기본 Grid 좌표 계산
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:178
 half3 ddgi_sample_irradiance(in float3 P, in half3 N, inout half3 out_dominant_lightdir, inout half3 out_dominant_lightcolor)
 {
@@ -1469,7 +1509,7 @@ half3 ddgi_sample_irradiance(in float3 P, in half3 N, inout half3 out_dominant_l
 
 ddgi_base_probe_coord 함수:
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:133
 inline uint3 ddgi_base_probe_coord(float3 P)
 {
@@ -1480,7 +1520,7 @@ inline uint3 ddgi_base_probe_coord(float3 P)
 
 1. 8개 인접 Probe 순회 (Trilinear Interpolation) 
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:195
 // 8개의 cube vertex들을 순회하여 trilinear interpolation 수행
 for (min16uint i = 0; i < 8; ++i) {
@@ -1500,7 +1540,7 @@ for (min16uint i = 0; i < 8; ++i) {
 
 1. Weight 계산 (여러 조건들의 곱)
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:224
 // 3.1 Trilinear 가중치 계산
 half3 trilinear = lerp(1.0 - alpha, alpha, half3(offset));
@@ -1537,7 +1577,7 @@ weight *= trilinear.x * trilinear.y * trilinear.z;
 
 1. SH 계수 Unpack 및 누적
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:293
 // 4.1 Probe의 packed SH 데이터를 unpack
 SH::L4_RGB::Packed packed_radiance;
@@ -1561,7 +1601,7 @@ sum_weight += weight;
 
 1. 최종 Irradiance 계산
 
-```glsl
+```c
 // ShaderInterop_DDGI.h:321
 if (sum_weight > 0) {
 	// 가중치로 정규화
