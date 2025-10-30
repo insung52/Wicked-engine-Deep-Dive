@@ -12,15 +12,24 @@ RHS CCW = LHS CW
 ```cpp
 if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 {
-    // VizMotive geometry is CCW by default, so set CCW flag for normal (non-mirrored) transforms
-    instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGL
-E_FRONT_COUNTERCLOCKWISE;
-
+  // VizMotive geometry is CCW by default, so set CCW flag for normal (non-mirrored) transforms
+  instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
 ```
-코드의 역할 : **CCW 를 앞면으로 인식하겠다.**
+이 코드의 역할 : **CCW 를 앞면으로 인식하겠다.**
 
 따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식하도록 CCW 플래그를 수정해야 합니다.
 
+문제 해결 코드:
+```cpp
+if (XMVectorGetX(XMMatrixDeterminant(W)) < 0)
+{
+  // VizMotive uses RHS (Right-Handed System), but DXR operates in LHS (Left-Handed System)
+  // RHS CCW geometry is interpreted as CW by DXR, matching DXR's default CW=frontface behavior
+  // Only mirrored transforms (det < 0) need CCW flag: RHS CCW → mirror → RHS CW = DXR CCW
+  //	https://docs.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_raytracing_instance_flags
+  instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
+}
+```
 
 ---
 # 디버깅 과정 (기록용)
@@ -152,6 +161,8 @@ q : probe 에서 출발하는 아무 방향의 raytracing 결과?
 
 
 ---
+
+이전 문제 분석 내용 정리
 
 ### 1. DDGI 문제 분석
 
