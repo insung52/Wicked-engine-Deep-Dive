@@ -1,4 +1,159 @@
-# 1. DDGI 문제 분석
+# 핵심 정보
+
+RHS CCW = LHS CW
+
+# 문제 원인
+- vizmotive engine 의 geometry 는 RHS CCW
+- 일반 렌더링 시 : RHS 그대로 사용하므로 정상 작동
+- DXR 은 LHS 기준으로 winding 판단 -> geometry를 CW 로 인식!
+  - wicked 엔진의 경우, LHS CCW geometry 이므로, DXR 을 사용하더라도 geometry를 똑같이 CCW 로 인식합니다.
+
+기존 코드 (Wicked Engine 과 Vizmotive Engine 동일):
+```cpp
+if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
+{
+    // VizMotive geometry is CCW by default, so set CCW flag for normal (non-mirrored) transforms
+    instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGL
+E_FRONT_COUNTERCLOCKWISE;
+
+```
+코드의 역할 : **CCW 를 앞면으로 인식하겠다.**
+
+따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식하도록 CCW 플래그를 수정해야 합니다.
+
+
+---
+# 디버깅 과정 (기록용)
+
+### DDGI raytracing 의 빛 방향 또는 geometry 의 표면 방향에 오류가 없음을 검증함 (문제 범위 축소) (25/10/30 디버깅)
+
+ddgi_debugPS.hlsl 셰이더 코드를 수정하여 3개의 데이터를 rgb로 시각화
+
+![alt text](<image copy 2.png>)
+
+- Red 채널: isBackface (빨간색 = backface, 검은색 = frontface)
+
+- 결과 : 메시 외부 : 빨간색, 메시 내부 : 검은색
+
+- Green 채널: NdotL (초록색 밝기 = 조명 강도)
+
+- 결과(외부) : 메시 근처, 조명 반대편 probe 가 초록색
+- 메시 내부 : 조명이랑 가까운쪽 probe 가 초록색 (외부랑 반대)
+
+- Blue 채널: Normal Y (파란색 밝기 = normal의 위/아래 방향)
+
+- 결과(외부) : 바닥 메시 아래 probe 가 파란색, 위 probe 가 검은색
+- 메시 내부 : 파란색 (근데 그렇게 차이는 모르겠음)
+
+backface true -> -N 적용됨(surfaceHF.hlsli:390).
+
+이 코드의 원래 역할 : 메시 내부의 probe 도 간접조명 정보를 얻을 수 있게하기 위함. 
+
+결국 isBackface 가 제대로 나와야 해결됨.
+
+해당 줄의 코드 비활성화시, Red 는 그대로, Green 은 올바른 값 나옴, Blue 도 올바른 값 나옴.
+
+= front face 를 back face 로 인식하지만, 노말 방향을 뒤집지 않기 때문에 ddgi 가 정상적을 작동함.(????) 진짜 그 surface 가 winding 이 문제가 있어서 노말 방향이 뒤집혀 있었다면, -N 을 적용한 기존 코드에서 문제가 없었어야 되지 안나???
+
+다시 분석
+
+isbackface 일때 노말 방향을 뒤집었을때 ddgi 오류 (ndotL 이 반대) -> isbackface 가 true 더라도, 노말 방향을 뒤집지 않았을때 ddgi 가 정상작동을 한다 -> isBackface 랑 관계없이 해당 면의 노말은 제대로 계산되었다??? -> isBackface 가 사실 반대여야 한다???
+
+### 경우의 수를 나누어 최종 검증
+
+조명 -> probe -> 메시 앞면 인 경우에 대해서,
+
+경우의 수 : N dot L 계산 시, light 의 방향이 제대로 설정되지 않은 경우 (L : light -> surface(면으로 들어가는 방향), 원래 n dot l 계산할떄는 surface -> light 로 빛 방향을 진행방향의 반대로 해야 됨.)
+
+- 기존 : isbackface true 이므로 -N 적용 -> -N dot L 이 음수로 나옴 -> -N 은 면에서 나오는 방향이다. -> N 은 면으로 들어가는 방향이다.(기존의 반대)
+
+- -N 코드 제거 : N dot L 이 양수 -> N 이 면으로 들어가는 방향이다(기존의 반대)
+
+경우의 수 2 : L 방향은 문제가 없다. (N dot L 계산할때 L 방향을 실제 빛 진행방향의 반대로 잘 설정했다, surface -> light, 즉 면에서 나오는 방향)
+
+- 기존 : isbackface true 이므로 -N 적용 -> -N dot L 이 음수 -> -N 이 면으로 들어가는 방향 -> N 은 면에서 나오는 방향.(정상)
+
+- -N 코드 제거 : N dot L 이 양수 -> N 이 면에서 나오는 방향이다.(정상)
+
+**결론 : 가능한 경우의 수 : (빛의 방향이 정상 and N 방향도 정상) or (빛의 방향이 비정상 and N 방향도 비정상)**
+
+**따라서 빛의 방향과 N 방향 에 따른 처리 코드는 문제가 없다!**
+
+더 조사해야될 부분 : isBackface 는 대체 누구 기준으로 계산하는지? probe 가 어떠한 삼각형을 보았을때 그 삼각형이 backface 인지 frontface 인지 확인하나? 그 코드에 문제가 있는가?
+
+---
+
+backface 결정 코드 : surface.SetBackface(!q.CommittedTriangleFrontFace()); (ddgi_raytraceCS.hlsl:265)
+
+이 코드에서 ! 를 제거하면 놀랍게도 ddgi 가 정상적으로 작동함.
+
+허나 그 현상에 대한 합리적이고 정확하고 본질적인 이유를 알아내야함.
+
+q : probe 에서 출발하는 아무 방향의 raytracing 결과?
+```cpp
+		RayDesc ray;
+		ray.Origin = probePos;
+		ray.TMin = 0; // don't need TMin because we are not tracing from a surface
+		ray.TMax = FLT_MAX;
+		ray.Direction = normalize(raydir);
+
+#ifdef RTAPI
+		vzRayQuery q;
+		q.TraceRayInline(
+			scene_acceleration_structure,	// RaytracingAccelerationStructure AccelerationStructure
+			//RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
+			RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+			RAY_FLAG_FORCE_OPAQUE,			// uint RayFlags
+			push.instanceInclusionMask,		// uint InstanceInclusionMask
+			ray								// RayDesc Ray
+		);
+		while (q.Proceed());
+		if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+```
+이 q 에서 사용하는 코드들에 문제가 있을 수 있다. ex. scene_acceleration_structure, ray
+이 부분에 대해서 제대로 확인. ex (레이트레이싱 가속 구조 생성시 rhs, lhs 별로 방법이 다르다거나?)
+
+---
+
+1. light direction 계산 - ndotL 계산할때, L 의 방향이 표면에서 light source 로 가는 방향이어야 함. 즉 lgith 의 실제 입사 방향과 반대여야함. (DDGI 의 경우 surface -> probe 방향으로 바꿔야함) 이 코드가 구현이 되어있는가?
+
+  1. CPU Side (BasicComponents.cpp)
+```cpp
+  const XMVECTOR BASE_LIGHT_DIR = XMVectorSet(0, 0, -1, 0); // Forward direction
+  // 빛이 나아가는 방향 (light → surface)
+  // 예: 태양이 위에서 아래로 빛을 쏨 → (0, 0, -1)
+
+  XMStoreFloat3(&direction, XMVector3Normalize(XMVector3TransformNormal(BASE_LIGHT_DIR, W)));
+  // light.direction = 빛의 진행 방향
+```
+  2. GPU Upload (RenderPath3D_Detail.cpp:920-921)
+```cpp
+  // note: the light direction used in shader refers to the direction to the light source
+  shaderentity.SetDirection(XMFLOAT3(-light.direction.x, -light.direction.y, -light.direction.z));
+```
+  여기서 부호 반전
+  - CPU의 light.direction: (0, 0, -1) (빛이 아래로 내려감)
+  - GPU로 전달: (0, 0, +1) (표면에서 빛을 향해 위로 올라감)
+
+  3. Shader (ddgi_raytraceCS.hlsl, lightingHF.hlsli)
+```cpp
+  L = light.GetDirection().xyz;  // (0, 0, +1) = surface → light
+  NdotL = saturate(dot(L, surface.N));
+```
+
+2. GeometryGenerator.cpp 에서 CW winding 하는 코드를 CWW 로 변경해야함. vizmotive 는 CWW winding 으로 하기로 결정했음.
+
+적용후, ddgi probe 들은 제대로 조명 계산을 하지만, 카메라에서 뒷면만 보이는 새로운 문제가 발생함!
+
+![alt text](<image copy.png>)
+
+
+3. mesh importer 에서 읽어들인 데이터를 CPU, GPU 에 저장할때, winding convention 을 바꾸는 경우가 있는지 확인해야함.
+
+
+---
+
+### 1. DDGI 문제 분석
 
 바닥 메시 있을때 - 바닥 메시 아래의 probe 가, 바닥 메시의 아랫면을 무시하고, 바닥 메시 윗면의 밝은 간접광을 샘플링해서 밝아짐
 
@@ -29,6 +184,8 @@ probe 들이 메시의 앞면에 맞은 경우 (if (surface.IsBackface()==True) 
 ![alt text](i6.png)
 
 결론 : 모든 면들의 노멀 방향이 반대다! Surface 의 is_backface 를 결정하는 로직을 변경해야한다. (좌표계에 맞게)
+
+---
 
 # 2. DDGI 문제 해결
 
