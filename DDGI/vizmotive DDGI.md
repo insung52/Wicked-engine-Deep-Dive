@@ -1,3 +1,35 @@
+1031 분석
+
+DirectX Raytracing 에서 LHS 에 의존하는 부분을 찾고 이를 RHS 로 수정하는 방법으로 진행
+
+해야할 일 : DDGI raytracing 에서 LHS에 의존하는 부분 찾기
+
+RTX 기반 ray-tracer 이해
+DDGI ray-tracing 코드 리뷰
+
+VizMotive Engine DXR 구조:
+
+1. Scene Update (CPU)
+    ↓
+    SceneUpdate_Detail.cpp
+    - BLAS/TLAS 생성
+    - Instance flags 설정 ← 우리가 수정한 부분!
+    ↓
+2. Graphics Backend (CPU → GPU)
+    ↓
+    GraphicsDevice_DX12.cpp
+    - DXR API 호출
+    - D3D12 구조체 변환
+    ↓
+3. GPU Raytracing (GPU)
+    ↓
+    ddgi_raytraceCS.hlsl
+    - TraceRayInline() 호출
+    - Hit 결과 처리
+    - CommittedTriangleFrontFace() 판정
+
+---
+
 # 핵심 정보
 
 RHS CCW = LHS CW
@@ -8,6 +40,8 @@ RHS CCW = LHS CW
 - DXR 은 LHS 기준으로 winding 판단 -> geometry를 CW 로 인식!
   - wicked 엔진의 경우, LHS CCW geometry 이므로, DXR 을 사용하더라도 geometry를 똑같이 CCW 로 인식합니다.
 
+DXR 은 기본적으로 LHS CW 를 앞면으로 인식하는데, Wicked Engine 은 LHS 이고, CCW 를 앞면으로 geometry 를 생성하므로, 해당 코드를 사용합니다.
+
 기존 코드 (Wicked Engine 과 Vizmotive Engine 동일):
 ```cpp
 if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
@@ -15,7 +49,7 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
   // VizMotive geometry is CCW by default, so set CCW flag for normal (non-mirrored) transforms
   instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
 ```
-이 코드의 역할 : **CCW 를 앞면으로 인식하겠다.**
+이 코드의 역할 : 일반적인 geometry(det>0) 에 대해, **CCW 를 앞면으로 인식하겠다.**
 
 따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식하도록 CCW 플래그를 수정해야 합니다.
 
