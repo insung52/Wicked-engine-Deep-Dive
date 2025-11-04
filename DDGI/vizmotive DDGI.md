@@ -43,9 +43,9 @@ Wicked Engine 은 LHS CCW 를 앞면으로 geometry 를 생성하므로, 해당 
 
 기존 코드 (Wicked Engine 과 Vizmotive Engine 동일):
 ```cpp
+// SceneUpdate_Detail.cpp:707
 if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 {
-  // VizMotive geometry is CCW by default, so set CCW flag for normal (non-mirrored) transforms
   instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
 ```
 이 코드의 역할 : 일반적인 geometry(det>0) 에 대해, **CCW 를 앞면으로 인식하겠다.**
@@ -63,6 +63,7 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 
 문제 해결 코드:
 ```cpp
+// SceneUpdate_Detail.cpp:707
 if (XMVectorGetX(XMMatrixDeterminant(W)) < 0)
 {
   // VizMotive uses RHS (Right-Handed System), but DXR operates in LHS (Left-Handed System)
