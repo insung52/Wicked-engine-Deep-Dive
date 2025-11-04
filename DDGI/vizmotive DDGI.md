@@ -30,11 +30,10 @@ VizMotive Engine DXR 구조:
 
 ---
 
-# 핵심 정보
-
-RHS CCW = LHS CW
-
 # 문제 원인
+
+
+
 ### Wicked Engine
 
 - DXR 은 기본적으로 LHS CW 를 앞면으로 인식
@@ -54,7 +53,11 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 ### Vizmotive Engine
 - vizmotive engine 의 geometry 는 RHS CCW
 - 일반 렌더링 시 : RHS 그대로 사용하므로 정상 작동
-- DXR 은 LHS 기준으로 winding 판단 -> geometry의 앞면을 CW 로 인식! **RHS CCW = LHS CW**
+- DXR 은 LHS 기준으로 winding 판단 -> geometry의 앞면을 CW 로 인식! 
+
+### 핵심 정보
+
+**RHS CCW = LHS CW**
   
 따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식 (DXR 기본값) 하도록 CCW 플래그의 조건을 반대로 수정해야 합니다.
 
