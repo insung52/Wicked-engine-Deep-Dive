@@ -1,12 +1,3 @@
-1031 분석
-
-DirectX Raytracing 에서 LHS 에 의존하는 부분을 찾고 이를 RHS 로 수정하는 방법으로 진행
-
-해야할 일 : DDGI raytracing 에서 LHS에 의존하는 부분 찾기
-
-RTX 기반 ray-tracer 이해
-DDGI ray-tracing 코드 리뷰
-
 VizMotive Engine DXR 구조:
 
 1. Scene Update (CPU)
