@@ -59,7 +59,7 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 
 **RHS CCW = LHS CW**
   
-따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식 (DXR 기본값) 하도록 CCW 플래그의 조건을 반대로 수정해야 합니다.
+따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식 (DXR 기본값) 하도록 CCW 플래그의 조건을 wicked 와 반대로 수정해야 합니다.
 
 문제 해결 코드:
 ```cpp
