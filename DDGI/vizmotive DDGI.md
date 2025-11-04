@@ -55,7 +55,7 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 - 일반 렌더링 시 : RHS 그대로 사용하므로 정상 작동
 - DXR 은 LHS 기준으로 winding 판단 -> geometry의 앞면을 CW 로 인식! 
 
-### 핵심 정보
+핵심 정보
 
 **RHS CCW = LHS CW**
   
