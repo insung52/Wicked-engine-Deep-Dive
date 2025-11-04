@@ -35,12 +35,12 @@ VizMotive Engine DXR 구조:
 RHS CCW = LHS CW
 
 # 문제 원인
-- vizmotive engine 의 geometry 는 RHS CCW
-- 일반 렌더링 시 : RHS 그대로 사용하므로 정상 작동
-- DXR 은 LHS 기준으로 winding 판단 -> geometry를 CW 로 인식!
-  - wicked 엔진의 경우, LHS CCW geometry 이므로, DXR 을 사용하더라도 geometry를 똑같이 CCW 로 인식합니다.
+### Wicked Engine
 
-DXR 은 기본적으로 LHS CW 를 앞면으로 인식하는데, Wicked Engine 은 LHS 이고, CCW 를 앞면으로 geometry 를 생성하므로, 해당 코드를 사용합니다.
+- DXR 은 기본적으로 LHS CW 를 앞면으로 인식
+- wicked 엔진의 경우, LHS CCW geometry 이므로, DXR 을 사용하더라도 geometry를 CCW 그대로 인식합니다.
+
+Wicked Engine 은 LHS CCW 를 앞면으로 geometry 를 생성하므로, 해당 코드를 사용합니다.
 
 기존 코드 (Wicked Engine 과 Vizmotive Engine 동일):
 ```cpp
@@ -51,7 +51,12 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) > 0)
 ```
 이 코드의 역할 : 일반적인 geometry(det>0) 에 대해, **CCW 를 앞면으로 인식하겠다.**
 
-따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식하도록 CCW 플래그를 수정해야 합니다.
+### Vizmotive Engine
+- vizmotive engine 의 geometry 는 RHS CCW
+- 일반 렌더링 시 : RHS 그대로 사용하므로 정상 작동
+- DXR 은 LHS 기준으로 winding 판단 -> geometry의 앞면을 CW 로 인식! **RHS CCW = LHS CW**
+  
+따라서, vizmotive engine 에서는 DXR (DirectX Raytracing) 사용시 CW 를 앞면으로 인식 (DXR 기본값) 하도록 CCW 플래그의 조건을 반대로 수정해야 합니다.
 
 문제 해결 코드:
 ```cpp
@@ -64,6 +69,10 @@ if (XMVectorGetX(XMMatrixDeterminant(W)) < 0)
   instance.flags |= RaytracingAccelerationStructureDesc::TopLevel::Instance::FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
 }
 ```
+이 코드의 역할 : 반사된 geometry(det<0) 에 대해, CCW 를 앞면으로 인식. 
+
+일반적인 geometry 는 CW (기본) 를 앞면으로 인식
+
 
 ---
 # 디버깅 과정 (기록용)
