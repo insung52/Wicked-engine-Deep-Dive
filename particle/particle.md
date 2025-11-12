@@ -338,3 +338,19 @@ class EmittedParticleSystem {
     // 이것은 단순한 데이터가 아니라 "시스템"처럼 복잡함!
 };
 ```
+
+  | ECS 요소    | WickedEngine                                                    |
+  |-----------|-----------------------------------------------------------------|
+  | Entity    | wi::ecs::Entity (고유 ID)                                         |
+  | Component | EmittedParticleSystem, HairParticleSystem, TransformComponent 등 |
+  | System    | RunParticleUpdateSystem(), RunTransformUpdateSystem() 등         |
+
+Components.h 에 새로운 구조체(EmittedParticleComponent) 추가 (encapsule 확실하게 wicked 랑은 다르게)
+
+해당 구조체를 상속 받는 GEmittedParticleComponent 를 GComponents.h 에 추가
+
+	// 이런 함수는 셰이더 엔진에서 구현되어야함. component 내부 말고
+	void EmittedParticleSystem::Draw(const MaterialComponent& material, CommandList cmd, const PARTICLESHADERTYPE* shadertype_override) const
+
+    particlesystem_detail.cpp 같은 코드로 구현할 예정.
+    이런 RenderPath2D_Detail, ShadowMap_Detail.cpp같은 코드의 헤더는 보통 어디서 구현되는지 찾아보기.
