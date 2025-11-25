@@ -1938,6 +1938,7 @@ uint pack_rgba(float4 color) {
 - [ ] **Collision Detection**: Depth buffer collision
 - [ ] **Mesh Emission**: Emit from mesh surface
 - [ ] **GPU Culling**: Frustum culling on GPU
+- [ ] **Bloom Effect** : Add bloom effect to particles
 
 ### Medium Priority
 - [ ] **Soft Particles**: Depth fade near geometry
