@@ -93,6 +93,76 @@ struct ParticleCounters {
 };
 ```
 
+**Emit Location**: 파티클 생성 위치 및 개수 정보
+```cpp
+struct EmitLocation {
+    ShaderTransform transform;          // 생성 위치 transform (4x4 matrix)
+    uint count;                         // 생성할 파티클 개수
+    uint color;                         // 초기 색상 (RGBA8 packed)
+    int padding[2];                     // 16-byte alignment
+};
+```
+
+**Constant Buffer**: 파티클 시스템 파라미터 (CPU → GPU)
+```cpp
+struct EmittedParticleCB {
+    // Emitter settings
+    uint   xEmitterMaxParticleCount;
+    uint   xEmitterInstanceIndex;
+    uint   xEmitterMeshGeometryOffset;
+    uint   xEmitterMeshGeometryCount;
+    
+    // Particle properties
+    float  xParticleSize;
+    float  xParticleScaling;
+    float  xParticleRotation;
+    float  xParticleRandomPositionOffset;
+    
+    float  xParticleNormalFactor;
+    float  xParticleLifeSpan;
+    float  xParticleLifeSpanRandomness;
+    float  xParticleMass;
+    
+    float  xParticleMotionBlurAmount;
+    float  xParticleRandomColorFactor;
+    float  xParticleRandomVelocity;
+    float  xParticleRandomSize;
+    
+    uint   xEmitterOptions;             // Flags (frame blending, colliders, etc)
+    float  xEmitterFixedTimestep;
+    uint   padding[2];
+    
+    // Sprite animation
+    uint2  xEmitterFramesXY;            // Sprite sheet dimensions
+    uint   xEmitterFrameCount;
+    uint   xEmitterFrameStart;
+    
+    float2 xEmitterTexMul;
+    float  xEmitterFrameRate;
+    uint   xEmitterLayerMask;
+    
+    // Physics
+    float3 xParticleGravity;
+    float  xEmitterRestitution;         // Bounce factor
+    
+    float3 xParticleVelocity;
+    float  xParticleDrag;
+    
+    // Visual
+    float  xOpacityCurvePeakStart;      // Fade in end (0~1)
+    float  xOpacityCurvePeakEnd;        // Fade out start (0~1)
+    float  xParticleRandomRotation;
+    float  xParticleRandomRotationVelocity;
+    
+    float4 xParticleBaseColor;          // Base color (RGBA)
+    
+    float3 xParticleEmissiveColor;      // Emissive color (RGB)
+    float  xParticleEmissiveStrength;   // Emissive strength
+    
+    ShaderTransform xEmitterBaseMeshUnormRemap;  // Mesh emission transform
+};
+```
+
 ### Double Buffering Strategy
 
 **왜 2개 버퍼가 필요한가?**
