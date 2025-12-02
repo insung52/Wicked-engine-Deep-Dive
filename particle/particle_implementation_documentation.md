@@ -81,7 +81,7 @@ struct Particle {
 };
 ```
 
-**Counter Buffer**:
+**Counter Buffer**: gpu 에서 파티클 상태를 추적하기 위한 카운터 버퍼
 ```cpp
 struct ParticleCounters {
     uint aliveCount;                    // Current frame alive count
@@ -95,22 +95,84 @@ struct ParticleCounters {
 
 ### Double Buffering Strategy
 
-**핵심 개념**: Emit와 Simulate가 서로 다른 버퍼에 읽기/쓰기
+**왜 2개 버퍼가 필요한가?**
+
+GPU에서 **동시에 읽기와 쓰기**를 하면 **Race Condition** 발생:
+```
+만약 버퍼가 1개라면:
+  Simulate (Thread 0): aliveList[0] 읽기 → 파티클 12 처리 중...
+  Simulate (Thread 1): aliveList[0] 쓰기 → 파티클 99 추가
+  
+  문제: Thread 0이 읽는 동안 Thread 1이 쓰면 데이터 손상!
+        또는 자기가 방금 쓴 데이터를 다시 읽는 문제 발생!
+```
+
+**해결책**: **읽기 버퍼**와 **쓰기 버퍼**를 분리
+
 
 ```
 Frame N:
   SwapBuffers()  →  aliveList[0] ⇄ aliveList[1]
   
   Emit:
-    Write → aliveList[0] (clean buffer)
+    Read:  없음 (새로 생성하므로 읽을 필요 없음)
+    Write: aliveList[0] (clean buffer)
   
   Simulate:
-    Read  → aliveList[1] (previous frame result)
-    Write → aliveList[0] (merge with Emit result)
+    Read:  aliveList[1] (이전 프레임 결과) ← Emit와 다른 버퍼!
+    Write: aliveList[0] (Emit 결과와 병합)  ← Emit와 같은 버퍼!
   
   Draw:
-    Read  → aliveList[0] (final result)
+    Read:  aliveList[0] (최종 결과)
 ```
+
+**중요**: Emit와 Simulate가 **같은 버퍼(aliveList[0])에 쓰는 것은 안전**
+- Atomic counter로 **서로 다른 인덱스**를 할당받음
+- Emit: aliveList[0][0~99] 사용
+- Simulate: aliveList[0][100~579] 사용
+- **충돌 없음!**
+
+---
+
+**구체적인 예시** (1000개 파티클, 500개 살아있음):
+
+**Frame N 시작 전**:
+```
+aliveList[0]: [비어있음]
+aliveList[1]: [12, 45, 78, ..., 234] (500개, 이전 프레임 Simulate 결과)
+```
+
+**Step 1: SwapBuffers()**:
+```
+aliveList[0]: [12, 45, 78, ..., 234] (500개) ← Simulate가 읽을 데이터
+aliveList[1]: [비어있음]                     ← Emit/Simulate가 쓸 곳
+```
+
+**Step 2: Emit (100개 생성)**:
+```
+Read:  없음
+Write: aliveList[1][0~99] = 새 파티클 100개
+```
+
+**Step 3: Simulate (500개 처리 → 480개 생존)**:
+```
+Read:  aliveList[0][0~499] (이전 프레임 결과 읽기)
+Write: aliveList[1][100~579] = 살아남은 480개 (Emit 뒤에 추가)
+```
+
+**결과**:
+```
+aliveList[0]: [12, 45, 78, ..., 234] (500개, 이제 쓸모없음)
+aliveList[1]: [새100개 + 살아남은480개] = 580개 (다음 프레임 사용)
+```
+
+---
+
+**Double Buffering의 핵심**:
+1. ✅ **Read-Write 분리**: Simulate가 읽는 버퍼 ≠ 쓰는 버퍼
+2. ✅ **데이터 무결성**: 읽는 중인 데이터를 보호
+3. ✅ **병렬 처리**: 여러 스레드가 안전하게 동시 실행
+4. ✅ **Atomic 안전성**: Emit와 Simulate가 같은 쓰기 버퍼를 공유해도 안전
 
 ---
 
@@ -136,7 +198,7 @@ Frame N:
 **Key Implementation**:
 
 **Emit Shader Logic**:
-```hlsl
+```c
 // 1. Dead list에서 파티클 인덱스 가져오기 (LIFO)
 int deadCount;
 counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, -1, deadCount);
@@ -156,7 +218,7 @@ aliveBuffer_CURRENT[aliveIndex] = particleIndex;
 ```
 
 **Simulate Shader Logic**:
-```hlsl
+```c
 // 1. Alive list에서 읽기
 uint particleIndex = aliveBuffer_CURRENT[DTid.x];
 Particle p = particleBuffer[particleIndex];
@@ -195,7 +257,7 @@ device->UpdateBuffer(&deadList_, deadIndices.data(), cmd, ...);
 - **Symptom**: 파티클이 카메라를 향하지 않음
 - **Root Cause**: View matrix 대신 inverse view matrix 사용해야 함
 - **Solution**: Inverse view matrix에서 right/up 벡터 추출
-```hlsl
+```c
 float3 right = float3(GetCamera().inverse_view._11, _21, _31);
 float3 up = float3(GetCamera().inverse_view._12, _22, _32);
 worldPos += right * quadPos.x + up * quadPos.y;
@@ -210,7 +272,7 @@ worldPos += right * quadPos.x + up * quadPos.y;
 **Key Implementation**:
 
 **Opacity Curve** (텍스처 → 계산 방식 변경):
-```hlsl
+```c
 float t = input.lifePercent;
 float opacityFactor;
 
@@ -224,7 +286,7 @@ if (t < xOpacityCurvePeakStart) {
 ```
 
 **Motion Blur**:
-```hlsl
+```c
 if (xParticleMotionBlurAmount > 0.0f) {
     float3 velocityViewSpace = mul((float3x3)GetCamera().view, particle.velocity);
     quadPos += dot(quadPos, velocityViewSpace) * velocityViewSpace * xParticleMotionBlurAmount;
@@ -244,30 +306,51 @@ if (xParticleMotionBlurAmount > 0.0f) {
 
 **Algorithm**: Bitonic Sort (AMD GPUSortLib 기반)
 
-```hlsl
+```c
 #define SORT_SIZE 512
-groupshared float2 g_LDS[SORT_SIZE];  // (distance, particleIndex)
+groupshared float2 g_LDS[SORT_SIZE];  // Shared memory: (distance, particleIndex)
 
-// 1. LDS에 로드
+// 1. LDS(Local Data Share)에 데이터 로드
 uint particleIndex = aliveBuffer[globalIndex];
 float distance = distanceBuffer[particleIndex];
 g_LDS[localIndex] = float2(distance, particleIndex);
 
-// 2. Bitonic sort
+// 2. Bitonic Sort 알고리즘
+// - 시간 복잡도: O(log²n)
+// - 병렬 처리에 최적화: 모든 비교를 동시에 수행 가능
+// - 고정된 비교 패턴: 데이터 값과 무관하게 항상 같은 순서
+
+// 외부 루프: Merge 크기를 2배씩 증가 (2 → 4 → 8 → ... → 512)
 for (uint mergeSize = 2; mergeSize <= SORT_SIZE; mergeSize *= 2) {
+    
+    // 내부 루프: 각 merge를 점점 작은 단위로 분할
+    // mergeSubSize: mergeSize/2 → mergeSize/4 → ... → 1
     for (uint mergeSubSize = mergeSize >> 1; mergeSubSize > 0; mergeSubSize >>= 1) {
+        
         uint compareDistance = mergeSubSize;
         uint index = localIndex;
+        
+        // XOR 트릭: 비교할 대상 인덱스 계산
+        // 예: compareDistance=1 → 0↔1, 2↔3, 4↔5, ...
+        //     compareDistance=2 → 0↔2, 1↔3, 4↔6, ...
         uint swapIndex = index ^ compareDistance;
         
+        // 중복 비교 방지 (각 쌍을 한 번만 비교)
         if (swapIndex > index) {
+            
+            // (index & mergeSize): Bitonic sequence의 방향 결정
+            // == 0: 증가 방향 (ascending)
+            // != 0: 감소 방향 (descending)
+            
             if ((index & mergeSize) == 0) {
+                // 증가 방향: 작은 값을 앞으로, 큰 값을 뒤로
                 if (g_LDS[index].x > g_LDS[swapIndex].x) {
                     float2 temp = g_LDS[index];
                     g_LDS[index] = g_LDS[swapIndex];
                     g_LDS[swapIndex] = temp;
                 }
             } else {
+                // 감소 방향: 큰 값을 앞으로, 작은 값을 뒤로
                 if (g_LDS[index].x < g_LDS[swapIndex].x) {
                     float2 temp = g_LDS[index];
                     g_LDS[index] = g_LDS[swapIndex];
@@ -275,13 +358,24 @@ for (uint mergeSize = 2; mergeSize <= SORT_SIZE; mergeSize *= 2) {
                 }
             }
         }
+        
+        // 모든 스레드 동기화 (다음 단계로 진행 전 모든 비교-교환 완료 대기)
         GroupMemoryBarrierWithGroupSync();
     }
 }
 
-// 3. 정렬된 인덱스 다시 쓰기
+// 3. 정렬된 결과를 alive buffer에 다시 쓰기
+// g_LDS[0] = 가장 먼 파티클 (먼저 그림)
+// g_LDS[511] = 가장 가까운 파티클 (나중에 그림)
 aliveBuffer[globalIndex] = (uint)g_LDS[localIndex].y;
 ```
+
+**Bitonic Sort 핵심**:
+- **XOR 연산**: `index ^ compareDistance`로 비교 대상을 빠르게 계산
+- **방향 제어**: `(index & mergeSize)`로 증가/감소 방향 결정
+- **병렬 처리**: 모든 스레드가 동시에 비교-교환 수행
+- **동기화**: `GroupMemoryBarrierWithGroupSync()`로 단계별 동기화
+- **결과**: 먼 파티클부터 정렬되어 반투명 렌더링 품질 향상
 
 ---
 
@@ -303,7 +397,7 @@ if (materialID != INVALID_ENTITY) {
 ```
 
 **Pixel Shader**:
-```hlsl
+```c
 float4 finalColor = texColor * xParticleBaseColor * input.color;
 finalColor.a *= opacityFactor;
 finalColor.rgb *= (1.0f + xParticleEmissive);  // HDR emissive
@@ -321,7 +415,7 @@ finalColor.rgb *= (1.0f + xParticleEmissive);  // HDR emissive
 **Goal**: 파티클 회전 및 회전 속도 구현
 
 **Packing Strategy** (메모리 절약):
-```hlsl
+```c
 // Pack: 2 floats → 1 uint32 (각각 16bit)
 uint rotationBits = uint((rotation + PI) / (2.0f * PI) * 65535.0f);
 uint rotationVelBits = uint((rotationVel + PI) / (2.0f * PI) * 65535.0f);
@@ -335,7 +429,7 @@ float rotationVel = (float(rotationVelBits) / 65535.0f) * 2.0f * PI - PI;
 ```
 
 **Simulate Shader에서 회전 적용**:
-```hlsl
+```c
 // Apply rotation velocity
 rotation += rotationVel * dt;
 
@@ -370,7 +464,7 @@ particle.rotation_rotationVelocity = pack_rotation(rotation, rotationVel);
 - **결과**: 해결 안 됨 ❌
 
 **Step 2: 디버그 시각화**
-```hlsl
+```c
 // VS에서
 output.particleIndex = particleIndex;
 output.aliveListIndex = input.instanceID;
@@ -464,7 +558,7 @@ void GRenderPath3DDetails::UpdateParticleSystem(...) {
 ```
 
 **2. Emit Shader 수정** (aliveBuffer_NEW 바인딩 추가):
-```hlsl
+```c
 // Before (잘못됨)
 RWStructuredBuffer<Particle> particleBuffer : register(u0);
 RWStructuredBuffer<uint> aliveBuffer_CURRENT : register(u1);
@@ -603,7 +697,7 @@ FinishUpdate: 1 group (1 thread)
 ## 🔧 Technical Deep Dive
 
 ### Random Number Generation
-```hlsl
+```c
 float rand(uint seed, uint offset) {
     uint h = seed + offset;
     h = (h ^ 61u) ^ (h >> 16u);
@@ -621,7 +715,7 @@ float rand(uint seed, uint offset) {
 ### Atomic Operations Usage
 
 **Counter Buffer**:
-```hlsl
+```c
 // Emit: Get dead particle
 int deadCount;
 counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, -1, deadCount);
@@ -638,7 +732,7 @@ counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, 1, deadIndex);
 ### Indirect Dispatch
 
 **KickoffUpdate Shader**:
-```hlsl
+```c
 uint aliveCount = counterBuffer.Load(PARTICLECOUNTER_OFFSET_ALIVECOUNT_AFTERSIMULATION);
 counterBuffer.Store(PARTICLECOUNTER_OFFSET_ALIVECOUNT, aliveCount);
 
@@ -650,7 +744,7 @@ indirectBuffer.Store(ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION + 8, 1);
 ```
 
 **FinishUpdate Shader**:
-```hlsl
+```c
 uint aliveCount = counterBuffer.Load(PARTICLECOUNTER_OFFSET_ALIVECOUNT_AFTERSIMULATION);
 
 // Prepare Draw args (DrawIndexedInstancedIndirect)
