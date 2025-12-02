@@ -58,10 +58,10 @@ graph TD
     A -->|Read/Write| G[Emit Shader]
     A -->|Read/Write| H[Simulate Shader]
     B <-->|Double Buffer| C
-    D -->|Pop| G
-    D <--| Push| H
-    F -->|Atomic Ops| G
-    F -->|Atomic Ops| H
+    G -->|Pop| D
+    H -->|Push| D
+    G -->|Atomic| F
+    H -->|Atomic| F
 ```
 
 ### Core Data Structures
