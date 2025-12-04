@@ -269,10 +269,15 @@ aliveList[1]: [새100개 + 살아남은480개] = 580개 (다음 프레임 사용
 
 **Emit Shader Logic**:
 ```c
-// 1. Dead list에서 파티클 인덱스 가져오기 (LIFO)
+// 1. Dead list에서 파티클 인덱스 가져오기 (LIFO - Last In First Out)
 int deadCount;
 counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, -1, deadCount);
+// deadCount: 현재 dead list의 크기 (예: 500)
+// InterlockedAdd(-1): deadCount를 1 감소시키고, 감소 전 값을 반환
+
 uint particleIndex = deadBuffer[deadCount - 1];
+// deadCount - 1: 스택의 top 위치 (예: 500 - 1 = 499)
+// deadBuffer[499]: 가장 최근에 추가된 파티클 인덱스 가져오기
 
 // 2. 파티클 초기화
 Particle p;
@@ -283,8 +288,30 @@ particleBuffer[particleIndex] = p;
 
 // 3. Alive list에 추가
 uint aliveIndex;
-counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_ALIVECOUNT_AFTERSIMULATION, 1, aliveIndex);
+counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_ALIVECOUNT_AFTERSIMULATION, 1, aliveIndex);\n
 aliveBuffer_CURRENT[aliveIndex] = particleIndex;
+```
+
+**Dead List LIFO 동작 예시**:
+```
+초기 상태 (deadCount = 500):
+deadBuffer: [0, 1, 2, ..., 497, 498, 499]
+                                    ↑
+                                   top
+
+Emit 실행 (100개 파티클 생성):
+1. deadCount: 500 → 499 (InterlockedAdd -1)
+   particleIndex = deadBuffer[499] = 499 가져옴
+   
+2. deadCount: 499 → 498
+   particleIndex = deadBuffer[498] = 498 가져옴
+   
+... (100번 반복)
+
+결과 (deadCount = 400):
+deadBuffer: [0, 1, 2, ..., 397, 398, 399, (비어있음)...]
+                                    ↑
+                                   top
 ```
 
 **Simulate Shader Logic**:
@@ -306,11 +333,37 @@ if (p.life > 0) {
     counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_ALIVECOUNT_AFTERSIMULATION, 1, newIndex);
     aliveBuffer_NEW[newIndex] = particleIndex;
 } else {
-    // Dead → Dead list
+    // Dead → Dead list (LIFO Push)
     uint deadIndex;
     counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, 1, deadIndex);
+    // deadCount: 400 → 401 (InterlockedAdd +1)
+    // deadIndex: 증가 전 값 = 400 반환
+    
     deadBuffer[deadIndex] = particleIndex;
+    // deadBuffer[400] = particleIndex (스택의 top에 추가)
 }
+```
+
+**Dead List에 추가 (Push) 예시**:
+```
+시뮬레이션 중 (deadCount = 400):
+파티클 234가 수명 종료 (life <= 0)
+
+1. InterlockedAdd(+1): deadCount 400 → 401
+   deadIndex = 400 (증가 전 값 반환)
+   
+2. deadBuffer[400] = 234 (스택 top에 추가)
+
+결과 (deadCount = 401):
+deadBuffer: [0, 1, 2, ..., 398, 399, 234]
+                                    ↑
+                                   top (새로 추가됨)
+```
+ 
+**LIFO의 장점**:
+- ✅ **Cache Locality**: 최근에 사용한 파티클 인덱스를 재사용 → CPU/GPU 캐시 효율 증가
+- ✅ **간단한 구현**: 스택 연산만으로 구현 가능 (Push/Pop)
+- ✅ **Atomic 안전성**: InterlockedAdd만으로 thread-safe 보장
 ```
 
 **Problem #1: Particles Not Spawning**
