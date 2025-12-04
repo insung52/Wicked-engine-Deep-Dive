@@ -159,13 +159,15 @@ struct EmittedParticleCB {
     float3 xParticleEmissiveColor;      // Emissive color (RGB)
     float  xParticleEmissiveStrength;   // Emissive strength
     
-    ShaderTransform xEmitterBaseMeshUnormRemap;  // Mesh emission transform
+    ShaderTransform xEmitterBaseMeshUnormRemap;  // Mesh emission transform, 메시 표면에서 파티클 방출시 사용
 };
 ```
 
 ### Double Buffering Strategy
 
 **왜 2개 버퍼가 필요한가?**
+
+aliveList 는 simulate 단계에서 읽기와 쓰기를 동시에 수행함.
 
 GPU에서 **동시에 읽기와 쓰기**를 하면 **Race Condition** 발생:
 ```
