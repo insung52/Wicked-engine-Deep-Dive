@@ -65,9 +65,21 @@ if (instanceResLookupUploadBuffer[0].desc.size <
 - Non-UMA 시스템(대부분의 discrete GPU)에서 Upload 버퍼의 `SHADER_RESOURCE` flag 제거
 - Default 버퍼로 복사하는 코드가 구현되지 않음 → 셰이더에서 읽기 실패
 
+```c
+// Upload buffer shouldn't be used by shaders with Non-UMA:
+
+desc.bind_flags = BindFlag::NONE;
+desc.misc_flags = ResourceMiscFlag::NONE;
+```
+
 **해결:**
 - 주석 처리하여 Upload 버퍼도 `SHADER_RESOURCE`로 유지
 - Non-UMA에서도 Upload 버퍼를 직접 사용
+
+```c
+// desc.bind_flags = BindFlag::NONE;
+// desc.misc_flags = ResourceMiscFlag::NONE;
+```
 
 ---
 
