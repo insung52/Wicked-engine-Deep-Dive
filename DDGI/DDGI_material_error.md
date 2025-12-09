@@ -5,7 +5,7 @@
 
 ## 문제 증상
 Sample6에서 4개의 메시(icosahedron 구, torus knot, canal tube, floor)가 있는 씬에서 DDGI를 활성화했을 때:
-
+![alt text](<스크린샷 2025-12-04 150416.png>)
 - 오직 첫 번째 메시(icosahedron 구)의 `baseColor`만 DDGI 간접광에 반영됨
 - 나머지 3개 메시의 색상은 완전히 무시됨
 - 구가 빨간색이면 모든 probe가 빨간색으로, 구가 노란색이면 모든 probe가 노란색으로 염색됨
@@ -126,6 +126,8 @@ desc.misc_flags = ResourceMiscFlag::NONE;
 - 각 probe가 실제로 hit한 메시의 색상을 정확히 샘플링
 - 빨강(구), 초록(knot), 파랑(canal), 회색(floor) 모두 DDGI에 기여
 - 디버그 출력: `materialIndex=0,1,2,3` (다양한 값)
+
+![alt text](image-1.png)
 
 ---
 
