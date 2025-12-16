@@ -14,7 +14,7 @@ Sample6에서 4개의 메시(icosahedron 구, torus knot, canal tube, floor)가 
 ---
 
 ## 원인 분석
-4가지 버그가 복합적으로 작용하여 발생:
+5가지 버그가 복합적으로 작용하여 발생:
 
 ### 1. Instance ID 불일치 (SceneUpdate_Detail.cpp:683)
 **문제:**
@@ -60,26 +60,109 @@ if (instanceResLookupUploadBuffer[0].desc.size <
 
 ---
 
-### 4. Non-UMA 시스템에서 Buffer 접근 불가 (SceneUpdate_Detail.cpp:1202-1203, 1390)
+### 4. Upload Buffer 복사 누락 (임시 해결책)
 **문제:**
-- Non-UMA 시스템(대부분의 discrete GPU)에서 Upload 버퍼의 `SHADER_RESOURCE` flag 제거
-- Default 버퍼로 복사하는 코드가 구현되지 않음 → 셰이더에서 읽기 실패
+- Non-UMA 시스템(대부분의 discrete GPU)에서 Upload → Default 버퍼 복사 코드가 구현되지 않음
+- instanceBuffer, geometryBuffer, materialBuffer는 RenderPath3D_Detail.cpp에서 제대로 복사됨
+- **instanceResLookupBuffer만 복사 코드 없음** → Default 버퍼가 비어있음
 
-```c
-// Upload buffer shouldn't be used by shaders with Non-UMA:
-
-desc.bind_flags = BindFlag::NONE;
+**원래 의도 (미완성):**
+```cpp
+// SceneUpdate_Detail.cpp:1172-1173
+desc.bind_flags = BindFlag::NONE;         // Upload buffer는 셰이더 바인딩 불필요
 desc.misc_flags = ResourceMiscFlag::NONE;
+
+// SceneUpdate_Detail.cpp:1348
+shaderscene.instanceResLookupBuffer = device->GetDescriptorIndex(&instanceResLookupBuffer, SubresourceType::SRV);
+
+// RenderPath3D_Detail.cpp: Upload → Default 복사 (❌ 이 코드가 누락됨!)
+```
+
+**임시 해결책:**
+```cpp
+// SceneUpdate_Detail.cpp:1172-1173 - 주석 처리
+// desc.bind_flags = BindFlag::NONE;
+// desc.misc_flags = ResourceMiscFlag::NONE;
+
+// SceneUpdate_Detail.cpp:1348 - Upload buffer 직접 사용
+shaderscene.instanceResLookupBuffer = device->GetDescriptorIndex(
+    &instanceResLookupUploadBuffer[pingpong_buffer_index], SubresourceType::SRV
+);
+```
+
+**문제점:**
+- Non-UMA에서 Upload buffer를 셰이더가 직접 읽음 (비효율적이지만 작동)
+- D3D12는 Upload buffer 읽기를 허용하지만 성능이 떨어짐
+
+---
+
+### 5. instanceResLookupBuffer Upload → Default 복사 누락 (근본 해결)
+**문제:**
+- 문제 4의 임시 해결책은 작동하지만 Non-UMA 시스템에서 비효율적
+- instanceResLookupBuffer는 생성되었지만 실제로 사용되지 않음
+- instanceBuffer, geometryBuffer, materialBuffer는 RenderPath3D_Detail.cpp에서 Upload → Default 복사가 구현됨
+- **instanceResLookupBuffer만 복사 코드가 완전히 누락됨**
+
+**근본 원인:**
+```cpp
+// RenderPath3D_Detail.cpp:1746 - instanceResLookupBuffer에 대한 barrier 없음
+barrierStack.push_back(GPUBarrier::Buffer(&scene_Gdetails->instanceBuffer, ...));
+barrierStack.push_back(GPUBarrier::Buffer(&scene_Gdetails->geometryBuffer, ...));
+barrierStack.push_back(GPUBarrier::Buffer(&scene_Gdetails->materialBuffer, ...));
+// ❌ instanceResLookupBuffer barrier 누락!
+
+// RenderPath3D_Detail.cpp:1802 - instanceResLookupBuffer에 대한 copy 없음
+device->CopyBuffer(&scene_Gdetails->instanceBuffer, ...);
+device->CopyBuffer(&scene_Gdetails->geometryBuffer, ...);
+device->CopyBuffer(&scene_Gdetails->materialBuffer, ...);
+// ❌ instanceResLookupBuffer copy 누락!
 ```
 
 **해결:**
-- 주석 처리하여 Upload 버퍼도 `SHADER_RESOURCE`로 유지
-- Non-UMA에서도 Upload 버퍼를 직접 사용
+```cpp
+// RenderPath3D_Detail.cpp:1746-1749 - Barrier 추가
+if (scene_Gdetails->instanceResLookupBuffer.IsValid())
+{
+    barrierStack.push_back(GPUBarrier::Buffer(&scene_Gdetails->instanceResLookupBuffer,
+        ResourceState::SHADER_RESOURCE, ResourceState::COPY_DST));
+}
 
-```c
-// desc.bind_flags = BindFlag::NONE;
-// desc.misc_flags = ResourceMiscFlag::NONE;
+// RenderPath3D_Detail.cpp:1802-1813 - Upload → Default Copy 추가
+if (scene_Gdetails->instanceResLookupBuffer.IsValid() && scene_Gdetails->instanceResLookupSize > 0)
+{
+    device->CopyBuffer(
+        &scene_Gdetails->instanceResLookupBuffer,
+        0,
+        &scene_Gdetails->instanceResLookupUploadBuffer[device->GetBufferIndex()],
+        0,
+        scene_Gdetails->instanceResLookupSize * sizeof(ShaderInstanceResLookup),
+        cmd
+    );
+    barrierStack.push_back(GPUBarrier::Buffer(&scene_Gdetails->instanceResLookupBuffer,
+        ResourceState::COPY_DST, ResourceState::SHADER_RESOURCE));
+}
+
+// SceneUpdate_Detail.cpp:1172-1173 - Upload buffer flag 제거 (주석 해제)
+desc.bind_flags = BindFlag::NONE;         // Upload buffer는 셰이더 바인딩 불필요
+desc.misc_flags = ResourceMiscFlag::NONE;
+
+// SceneUpdate_Detail.cpp:1348 - Default buffer 사용
+shaderscene.instanceResLookupBuffer = device->GetDescriptorIndex(&instanceResLookupBuffer, SubresourceType::SRV);
 ```
+
+**장점:**
+- Non-UMA 시스템에서 최적의 성능 (GPU VRAM에서 직접 읽기)
+- UMA 시스템에서도 정상 작동 (driver가 자동으로 최적화)
+- 다른 버퍼들(instance, geometry, material)과 일관된 패턴
+
+**비교:**
+
+| 항목 | 임시 해결책 (문제 4) | 근본 해결 (문제 5) |
+|------|---------------------|-------------------|
+| Upload buffer 바인딩 | ✅ 필요 (셰이더가 직접 읽음) | ❌ 불필요 (복사만 사용) |
+| Default buffer 사용 | ❌ 생성만 하고 미사용 | ✅ 셰이더가 읽음 |
+| Non-UMA 성능 | ⚠️ 낮음 (PCIe 접근) | ✅ 최적 (VRAM 접근) |
+| 코드 일관성 | ❌ 다른 버퍼와 다름 | ✅ 동일한 패턴 |
 
 ---
 
@@ -104,7 +187,10 @@ desc.misc_flags = ResourceMiscFlag::NONE;
 | SceneUpdate_Detail.cpp | 683        | `instance.instance_id = args.jobIndex`       | `instance.instance_id = renderable.renderableIndex` |
 | SceneUpdate_Detail.cpp | 716        | `args.jobIndex * ...`                        | `renderable.renderableIndex * ...`                 |
 | SceneUpdate_Detail.cpp | 1186       | `sizeof(uint)`                               | `sizeof(ShaderInstanceResLookup)`                  |
-| SceneUpdate_Detail.cpp | 1202-1203  | 주석 제거됨                                  | 주석 처리 (코드 비활성화)                          |
+| SceneUpdate_Detail.cpp | 1172-1173  | 주석 처리됨 (임시)                           | 주석 해제 (근본 해결)                              |
+| SceneUpdate_Detail.cpp | 1348       | Upload buffer 직접 사용 (임시)               | Default buffer 사용 (근본 해결)                    |
+| RenderPath3D_Detail.cpp | 1746-1749  | instanceResLookupBuffer barrier 없음         | Barrier 추가                                       |
+| RenderPath3D_Detail.cpp | 1802-1813  | instanceResLookupBuffer copy 없음            | Upload → Default Copy 추가                         |
 
 ---
 
@@ -136,3 +222,5 @@ desc.misc_flags = ResourceMiscFlag::NONE;
 2. **타입 안전성:** `sizeof(uint)` vs `sizeof(구조체)` → 정확한 타입 사용
 3. **UMA vs Non-UMA:** 메모리 아키텍처에 따라 버퍼 접근 방식 고려 필요
 4. **시각적 디버깅:** Shader에서 디버그 값을 색상으로 출력하면 문제를 빠르게 파악 가능
+5. **버퍼 복사 일관성:** 새 버퍼 추가 시 기존 패턴(Upload → Default 복사)을 반드시 따라야 함
+6. **임시 해결책의 위험성:** 작동하는 workaround라도 성능 저하나 미래의 버그를 야기할 수 있음
