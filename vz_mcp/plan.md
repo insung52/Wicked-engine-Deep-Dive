@@ -1,8 +1,61 @@
-# VizMotive Engine MCP Integration Plan
+# VizMotive Engine MCP Integration Plan (Revised)
 
 ## 개요
 
-VizMotive Engine을 MCP (Model Context Protocol) 서버로 통합하여 Claude와 같은 AI 어시스턴트가 3D 렌더링 엔진을 제어할 수 있도록 합니다. 이를 위해 VizMotive C++ API를 Python으로 바인딩하고, MCP 서버를 구현합니다.
+VizMotive Engine을 **Blender MCP와 동일한 방식**으로 통합합니다. Python GUI 프로그램(뷰어)에서 MCP 서버를 실행하여 Claude가 **실시간으로 3D 씬을 제어하고 확인**할 수 있도록 합니다.
+
+## 핵심 아키텍처 (Blender MCP 방식)
+
+### 블렌더 MCP 구조
+
+```
+┌──────────────────────────────────────┐
+│   Blender (독립 GUI 프로그램)          │
+│                                      │
+│   ┌──────────────────────────────┐  │
+│   │  Python (Blender 내장)        │  │
+│   │  ├─ bpy (Blender API)        │  │
+│   │  └─ MCP Server               │◄─┼─── Claude
+│   └──────────────────────────────┘  │
+│                                      │
+│   [3D Viewport - 실시간 렌더링]       │
+│   Claude 명령 → 큐브 생성 → 화면에 표시│
+│   Screenshot → Claude 확인 → 수정     │
+└──────────────────────────────────────┘
+```
+
+**핵심**:
+- GUI 프로그램 실행 → MCP 서버 시작 → Claude 연동
+- Claude 명령 → 실시간 화면 반영 → Claude가 스크린샷으로 확인
+
+### VizMotive MCP 구조 (동일한 방식!)
+
+```
+┌──────────────────────────────────────┐
+│   VizMotive Viewer (Python GUI)      │
+│                                      │
+│   ┌──────────────────────────────┐  │
+│   │  Python                       │  │
+│   │  ├─ pyvizmotive (바인딩)      │  │
+│   │  ├─ DearPyGui (GUI)          │  │
+│   │  └─ MCP Server               │◄─┼─── Claude
+│   └──────────────────────────────┘  │
+│          │                           │
+│          ▼                           │
+│   ┌──────────────────────────────┐  │
+│   │  VizEngine.dll (C++)         │  │
+│   │  (이미 빌드됨!)               │  │
+│   └──────────────────────────────┘  │
+│                                      │
+│   [3D Viewport - 실시간 렌더링]       │
+│   Claude 명령 → 메시 생성 → 화면에 표시│
+│   Screenshot → Claude 확인 → 수정     │
+└──────────────────────────────────────┘
+```
+
+**차이점**:
+- 블렌더는 완성된 프로그램, VizMotive는 라이브러리
+- **해결책**: Python으로 간단한 뷰어 프로그램 작성 (Sample14의 Python 버전)
 
 ## VizMotive Engine 구조 분석
 
@@ -43,30 +96,9 @@ VzMaterial* NewMaterial(const std::string& name);
 bool Render(const SceneVID vidScene, const CamVID vidCam, const float dt = -1.f);
 ```
 
-## MCP (Model Context Protocol) 이해
+## 구현 계획 (4 Phase)
 
-### MCP란?
-
-MCP는 Anthropic이 개발한 프로토콜로, AI 어시스턴트가 외부 데이터 소스 및 도구와 통신할 수 있도록 하는 표준 인터페이스입니다.
-
-### MCP 서버 구조
-
-```
-┌─────────────┐         ┌─────────────┐         ┌─────────────┐
-│   Claude    │ ◄─────► │  MCP Server │ ◄─────► │  VizMotive  │
-│  (Client)   │  JSON   │   (Python)  │   FFI   │   Engine    │
-└─────────────┘   RPC   └─────────────┘         └─────────────┘
-```
-
-### MCP 주요 기능
-
-1. **Resources**: 읽기 가능한 데이터 제공 (예: 씬 정보, 카메라 설정)
-2. **Tools**: 실행 가능한 작업 (예: 메시 생성, 렌더링)
-3. **Prompts**: 템플릿화된 프롬프트 제공
-
-## 구현 계획
-
-### Phase 1: Python 바인딩 생성
+### Phase 1: Python 바인딩 생성 (C++ → Python)
 
 #### 1.1 기술 선택: pybind11
 
@@ -75,14 +107,8 @@ MCP는 Anthropic이 개발한 프로토콜로, AI 어시스턴트가 외부 데�
 - 자동 타입 변환
 - STL 컨테이너 지원 (std::vector, std::string, std::map)
 - 헤더 온리 라이브러리 (빌드 간편)
-- NumPy 지원 (향후 확장성)
 
-**대안:**
-- SWIG: 레거시, 복잡한 설정
-- Boost.Python: 무거움, 빌드 복잡
-- ctypes: 순수 Python, C++ 기능 제한적
-
-#### 1.2 바인딩 구조
+#### 1.2 디렉토리 구조
 
 ```
 VizMotive-Engine/
@@ -92,32 +118,56 @@ VizMotive-Engine/
 │       ├── VzCamera.h
 │       ├── VzRenderer.h
 │       └── ...
-├── PythonBindings/           # 새로 생성
+├── Install/                      # 이미 빌드된 엔진
+│   ├── bin/
+│   │   ├── debug_dll/VizEngined.dll
+│   │   └── release_dll/VizEngine.dll
+│   ├── lib/
+│   │   ├── VizEngined.lib
+│   │   └── VizEngine.lib
+│   └── vzm2/                    # 헤더 파일
+│       └── VzEngineAPIs.h
+├── PythonBindings/               # Python 바인딩
 │   ├── CMakeLists.txt
+│   ├── setup.py
 │   ├── src/
-│   │   ├── pyvizmotive.cpp  # 메인 바인딩
-│   │   ├── bind_engine.cpp  # 엔진 초기화
-│   │   ├── bind_scene.cpp   # Scene 관련
-│   │   ├── bind_camera.cpp  # Camera 관련
-│   │   ├── bind_renderer.cpp # Renderer 관련
-│   │   ├── bind_geometry.cpp # Geometry 관련
-│   │   └── bind_material.cpp # Material 관련
+│   │   ├── pyvizmotive.cpp      # 메인 바인딩
+│   │   ├── bind_engine.cpp      # 엔진 초기화
+│   │   ├── bind_scene.cpp       # Scene 관련
+│   │   ├── bind_camera.cpp      # Camera 관련
+│   │   ├── bind_renderer.cpp    # Renderer 관련
+│   │   ├── bind_geometry.cpp    # Geometry 관련
+│   │   └── bind_material.cpp    # Material 관련
 │   └── tests/
 │       └── test_basic.py
-└── vz_mcp/                   # 새로 생성
-    ├── server.py             # MCP 서버
-    ├── tools/                # MCP Tools
-    ├── resources/            # MCP Resources
+└── vz_mcp/                       # MCP 통합 GUI
+    ├── vz_viewer_mcp.py          # GUI 뷰어 + MCP 서버
+    ├── tools/
+    │   ├── __init__.py
+    │   ├── scene_tools.py
+    │   ├── camera_tools.py
+    │   └── render_tools.py
     └── requirements.txt
 ```
 
-#### 1.3 pybind11 예제
+#### 1.3 빌드 방법
+
+**Visual Studio 2026 Insiders에서 CMake 프로젝트 열기**
+
+1. VS 2026 Insiders 실행
+2. `File → Open → CMake...`
+3. `PythonBindings/CMakeLists.txt` 선택
+4. VS가 자동으로 CMake 구성
+5. `Build → Build All`
+6. 결과: `pyvizmotive.pyd` 생성
+
+#### 1.4 바인딩 예제
 
 ```cpp
 // PythonBindings/src/bind_engine.cpp
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "VzEngineAPIs.h"
+#include "vzm2/VzEngineAPIs.h"
 
 namespace py = pybind11;
 
@@ -138,435 +188,497 @@ void bind_engine(py::module& m) {
           py::arg("name"),
           "Create a new renderer",
           py::return_value_policy::reference);
-}
-```
 
-```cpp
-// PythonBindings/src/bind_camera.cpp
-void bind_camera(py::module& m) {
-    py::class_<vzm::VzCamera, vzm::VzSceneObject>(m, "Camera")
-        .def("set_world_pose", &vzm::VzCamera::SetWorldPose,
-             py::arg("pos"), py::arg("view"), py::arg("up"))
-        .def("set_perspective_projection",
-             &vzm::VzCamera::SetPerspectiveProjection,
-             py::arg("zNearP"), py::arg("zFarP"),
-             py::arg("fovInDegree"), py::arg("aspectRatio"),
-             py::arg("isVertical") = true)
-        .def("get_world_pose", [](const vzm::VzCamera& cam) {
-            vfloat3 pos, view, up;
-            cam.GetWorldPose(pos, view, up);
-            return py::make_tuple(
-                py::make_tuple(pos.x, pos.y, pos.z),
-                py::make_tuple(view.x, view.y, view.z),
-                py::make_tuple(up.x, up.y, up.z)
-            );
-        });
+    m.def("new_camera", &vzm::NewCamera,
+          py::arg("name"),
+          py::arg("parent_vid") = 0u,
+          "Create a new camera",
+          py::return_value_policy::reference);
 }
 ```
 
 ```python
-# Python 사용 예제
+# Python에서 사용
 import pyvizmotive as vzm
 
-# 엔진 초기화
 vzm.init_engine()
-
-# Scene, Renderer, Camera 생성
-scene = vzm.new_scene("main_scene")
-renderer = vzm.new_renderer("main_renderer")
-camera = vzm.new_camera("main_camera")
-
-# 카메라 설정
-camera.set_world_pose(
-    pos=(0, 0, 5),
-    view=(0, 0, -1),
-    up=(0, 1, 0)
-)
-camera.set_perspective_projection(
-    zNearP=0.1,
-    zFarP=1000.0,
-    fovInDegree=60.0,
-    aspectRatio=16/9
-)
-
-# 렌더링
-renderer.render(scene, camera)
-
-# 정리
-vzm.deinit_engine()
+scene = vzm.new_scene("main")
+renderer = vzm.new_renderer("main")
+camera = vzm.new_camera("cam")
 ```
 
-#### 1.4 CMake 설정
+---
 
-```cmake
-# PythonBindings/CMakeLists.txt
-cmake_minimum_required(VERSION 3.15)
-project(pyvizmotive)
+### Phase 2: Python GUI 뷰어 작성 (Sample14의 Python 버전)
 
-find_package(Python REQUIRED COMPONENTS Interpreter Development)
-find_package(pybind11 REQUIRED)
+#### 2.1 기술 선택: DearPyGui
 
-pybind11_add_module(pyvizmotive
-    src/pyvizmotive.cpp
-    src/bind_engine.cpp
-    src/bind_scene.cpp
-    src/bind_camera.cpp
-    src/bind_renderer.cpp
-    src/bind_geometry.cpp
-    src/bind_material.cpp
-)
+**이유:**
+- ImGui 기반 (Sample14와 유사)
+- Python 네이티브 라이브러리
+- 렌더링 텍스처 표시 가능
+- 간단한 API
 
-target_link_libraries(pyvizmotive PRIVATE EngineCore)
-target_include_directories(pyvizmotive PRIVATE
-    ${CMAKE_SOURCE_DIR}/EngineCore/HighAPIs
-)
-```
+**대안 고려:**
+- Pygame: 너무 기본적, 3D에 부적합
+- PyQt5/PySide6: 무겁고 복잡
+- Tkinter: 3D 렌더링 통합 어려움
 
-### Phase 2: MCP 서버 구현
-
-#### 2.1 기술 선택
-
-**FastMCP** (권장)
-- Python 기반 MCP SDK
-- 데코레이터 기반 간단한 API
-- 자동 JSON-RPC 핸들링
-- 타입 힌팅 지원
+#### 2.2 GUI 뷰어 구조
 
 ```python
-from fastmcp import FastMCP
+# vz_mcp/vz_viewer.py (MCP 없는 기본 버전)
 import pyvizmotive as vzm
+from dearpygui import dearpygui as dpg
+import numpy as np
 
-mcp = FastMCP("VizMotive Engine")
+class VizMotiveViewer:
+    def __init__(self):
+        self.running = False
 
-@mcp.tool()
-def create_scene(name: str) -> dict:
-    """Create a new 3D scene"""
-    scene = vzm.new_scene(name)
-    return {"scene_id": scene.get_vid(), "name": name}
+        # VizMotive 초기화
+        vzm.init_engine()
 
-@mcp.tool()
-def create_camera(
-    name: str,
-    position: list[float],
-    look_at: list[float],
-    up: list[float] = [0, 1, 0],
-    fov: float = 60.0
-) -> dict:
-    """Create a camera with specified parameters"""
-    camera = vzm.new_camera(name)
-    view = [
-        look_at[0] - position[0],
-        look_at[1] - position[1],
-        look_at[2] - position[2]
-    ]
-    camera.set_world_pose(tuple(position), tuple(view), tuple(up))
-    camera.set_perspective_projection(0.1, 1000.0, fov, 16/9)
-    return {
-        "camera_id": camera.get_vid(),
-        "name": name,
-        "position": position,
-        "fov": fov
-    }
+        self.scene = vzm.new_scene("main_scene")
+        self.renderer = vzm.new_renderer("main_renderer")
+        self.camera = vzm.new_camera("main_camera")
 
-@mcp.resource("scene://{scene_name}")
-def get_scene_info(scene_name: str) -> str:
-    """Get scene information"""
-    scene = vzm.get_component_by_name(scene_name)
-    # Return scene details as JSON string
-    pass
+        # 카메라 설정
+        self.camera.set_world_pose(
+            pos=(0, 2, 5),
+            view=(0, 0, -1),
+            up=(0, 1, 0)
+        )
+        self.camera.set_perspective_projection(
+            zNearP=0.1,
+            zFarP=1000.0,
+            fovInDegree=60.0,
+            aspectRatio=16/9
+        )
+
+        # 렌더러 설정
+        self.renderer.set_canvas(1280, 720, 96.0)
+
+    def create_gui(self):
+        dpg.create_context()
+        dpg.create_viewport(title="VizMotive Viewer", width=1280, height=720)
+
+        with dpg.window(label="VizMotive Viewer", tag="main_window"):
+            # 3D 뷰포트
+            with dpg.group(horizontal=False):
+                dpg.add_text("3D Viewport")
+                # 렌더링 결과 표시
+                dpg.add_image("render_texture", width=1024, height=576)
+
+            # 컨트롤 패널
+            with dpg.collapsing_header(label="Scene Controls"):
+                dpg.add_button(label="Add Cube", callback=self.add_cube)
+                dpg.add_button(label="Add Light", callback=self.add_light)
+                dpg.add_button(label="Clear Scene", callback=self.clear_scene)
+
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+
+    def render_loop(self):
+        while dpg.is_dearpygui_running():
+            # VizMotive 렌더링
+            self.renderer.render(self.scene, self.camera)
+
+            # 렌더링 결과를 텍스처로 가져오기
+            # (VizEngine에서 텍스처 데이터 추출 필요)
+
+            # DearPyGui 업데이트
+            dpg.render_dearpygui_frame()
+
+    def add_cube(self):
+        # 큐브 생성
+        cube_geo = vzm.new_geometry("cube")
+        cube_mat = vzm.new_material("cube_mat")
+        cube = vzm.new_actor_static_mesh("cube_actor", cube_geo, cube_mat)
+
+    def cleanup(self):
+        dpg.destroy_context()
+        vzm.deinit_engine()
 
 if __name__ == "__main__":
-    vzm.init_engine()
-    mcp.run()
+    viewer = VizMotiveViewer()
+    viewer.create_gui()
+    viewer.render_loop()
+    viewer.cleanup()
 ```
 
-#### 2.2 MCP 서버 구조
+#### 2.3 VizEngine 렌더링 결과 가져오기
+
+**문제**: VizEngine의 렌더링 결과를 DearPyGui에 표시
+
+**해결 방법**:
+
+1. **SharedRenderTarget 사용** (VzRenderer::GetSharedRenderTarget)
+   - DirectX12 텍스처 공유
+   - DearPyGui에서 DirectX 텍스처 표시
+
+2. **스크린샷 파일 저장** (간단한 방법)
+   - VizEngine에서 PNG 저장
+   - DearPyGui에서 이미지 로드
+
+```python
+# 방법 2: 스크린샷 방식 (간단함)
+def render_loop(self):
+    while dpg.is_dearpygui_running():
+        # VizMotive 렌더링
+        self.renderer.render(self.scene, self.camera)
+
+        # 스크린샷 저장
+        self.renderer.save_screenshot("temp_render.png")
+
+        # DearPyGui에 표시
+        dpg.set_value("render_texture", load_image("temp_render.png"))
+
+        dpg.render_dearpygui_frame()
+```
+
+---
+
+### Phase 3: MCP 서버 GUI 통합 (핵심!)
+
+#### 3.1 MCP 서버 통합 구조
+
+```python
+# vz_mcp/vz_viewer_mcp.py
+import pyvizmotive as vzm
+from dearpygui import dearpygui as dpg
+from fastmcp import FastMCP
+import threading
+import asyncio
+
+class VizMotiveMCPViewer:
+    def __init__(self):
+        # VizMotive 초기화
+        vzm.init_engine()
+        self.scene = vzm.new_scene("main_scene")
+        self.renderer = vzm.new_renderer("main_renderer")
+        self.camera = vzm.new_camera("main_camera")
+
+        # MCP 서버
+        self.mcp = FastMCP("VizMotive Engine")
+        self.setup_mcp_tools()
+
+    def setup_mcp_tools(self):
+        """MCP Tools 등록"""
+
+        @self.mcp.tool()
+        def create_cube(name: str, position: list[float] = [0, 0, 0]) -> dict:
+            """Create a cube in the scene"""
+            cube_geo = vzm.new_geometry(f"{name}_geo")
+            cube_mat = vzm.new_material(f"{name}_mat")
+            cube = vzm.new_actor_static_mesh(name, cube_geo, cube_mat)
+            cube.set_position(position)
+            return {
+                "status": "created",
+                "name": name,
+                "position": position
+            }
+
+        @self.mcp.tool()
+        def get_screenshot() -> str:
+            """Get current viewport screenshot as base64"""
+            self.renderer.save_screenshot("temp_screenshot.png")
+            with open("temp_screenshot.png", "rb") as f:
+                import base64
+                return base64.b64encode(f.read()).decode()
+
+        @self.mcp.tool()
+        def set_camera_position(position: list[float], look_at: list[float]) -> dict:
+            """Set camera position and target"""
+            view = [
+                look_at[0] - position[0],
+                look_at[1] - position[1],
+                look_at[2] - position[2]
+            ]
+            self.camera.set_world_pose(
+                tuple(position),
+                tuple(view),
+                (0, 1, 0)
+            )
+            return {"status": "updated"}
+
+    def start_mcp_server(self):
+        """MCP 서버를 별도 스레드에서 시작"""
+        def run_mcp():
+            asyncio.run(self.mcp.run())
+
+        mcp_thread = threading.Thread(target=run_mcp, daemon=True)
+        mcp_thread.start()
+
+    def create_gui(self):
+        dpg.create_context()
+        dpg.create_viewport(title="VizMotive MCP Viewer", width=1280, height=720)
+
+        with dpg.window(label="VizMotive MCP Viewer", tag="main_window"):
+            # MCP 상태
+            with dpg.group(horizontal=True):
+                dpg.add_text("MCP Server Status: ")
+                dpg.add_text("Running", tag="mcp_status", color=(0, 255, 0))
+
+            # 3D 뷰포트
+            dpg.add_image("render_texture", width=1024, height=576)
+
+            # 씬 정보
+            with dpg.collapsing_header(label="Scene Info"):
+                dpg.add_text("Objects in scene:", tag="object_count")
+
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+
+    def render_loop(self):
+        while dpg.is_dearpygui_running():
+            # VizMotive 렌더링
+            self.renderer.render(self.scene, self.camera)
+
+            # 화면 업데이트
+            dpg.render_dearpygui_frame()
+
+    def run(self):
+        """메인 실행 함수"""
+        # MCP 서버 시작
+        self.start_mcp_server()
+
+        # GUI 생성 및 실행
+        self.create_gui()
+        self.render_loop()
+
+        # 종료
+        dpg.destroy_context()
+        vzm.deinit_engine()
+
+if __name__ == "__main__":
+    viewer = VizMotiveMCPViewer()
+    viewer.run()
+```
+
+#### 3.2 사용 시나리오 (블렌더와 동일!)
 
 ```
-vz_mcp/
-├── server.py              # 메인 서버
-├── tools/
-│   ├── __init__.py
-│   ├── scene_tools.py     # Scene 관련 tools
-│   ├── camera_tools.py    # Camera 관련 tools
-│   ├── renderer_tools.py  # Renderer 관련 tools
-│   ├── geometry_tools.py  # Geometry 관련 tools
-│   └── material_tools.py  # Material 관련 tools
-├── resources/
-│   ├── __init__.py
-│   └── scene_resources.py # Scene 정보 제공
-├── config.json            # MCP 설정
-└── requirements.txt
+1. 사용자: vz_viewer_mcp.py 실행
+   → GUI 창 열림
+   → MCP 서버 백그라운드 시작
+
+2. Claude Desktop에서 연결
+
+3. 사용자: "큐브 3개를 다른 위치에 만들어줘"
+
+   Claude:
+   [MCP Tool: create_cube(name="cube1", position=[0,0,0])]
+   [MCP Tool: create_cube(name="cube2", position=[2,0,0])]
+   [MCP Tool: create_cube(name="cube3", position=[-2,0,0])]
+   [MCP Tool: get_screenshot()]
+
+   → GUI 창에 실시간으로 큐브 3개 생성됨
+   → Claude가 스크린샷 확인
+
+   Claude: "3개의 큐브를 생성했습니다. 각각 x축 방향으로 2씩 떨어져 있습니다."
+
+4. 사용자: "카메라를 더 멀리 옮겨서 전체를 볼 수 있게 해줘"
+
+   Claude:
+   [MCP Tool: set_camera_position(position=[0,5,10], look_at=[0,0,0])]
+   [MCP Tool: get_screenshot()]
+
+   → GUI 창에서 카메라 위치 실시간 변경
+   → Claude가 확인
+
+   Claude: "카메라를 뒤로 이동시켰습니다. 이제 3개의 큐브가 모두 보입니다."
 ```
 
-#### 2.3 Tool 카테고리
+---
 
-**Scene Management**
-- `create_scene`: 씬 생성
-- `list_scenes`: 씬 목록 조회
-- `delete_scene`: 씬 삭제
+### Phase 4: Claude Desktop 연동
 
-**Camera Control**
-- `create_camera`: 카메라 생성
-- `set_camera_pose`: 카메라 위치/방향 설정
-- `set_camera_projection`: 카메라 투영 설정
-- `get_camera_info`: 카메라 정보 조회
-
-**Rendering**
-- `create_renderer`: 렌더러 생성
-- `set_canvas`: 캔버스 크기 설정
-- `render_frame`: 프레임 렌더링
-- `save_screenshot`: 스크린샷 저장
-
-**Geometry & Materials**
-- `create_geometry`: 지오메트리 생성
-- `load_model`: 3D 모델 로드
-- `create_material`: 재질 생성
-- `set_material_properties`: 재질 속성 설정
-
-**Actors**
-- `create_static_mesh`: 스태틱 메시 액터 생성
-- `create_light`: 조명 생성
-- `set_transform`: 변환 행렬 설정
-
-#### 2.4 Claude Desktop 설정
+#### 4.1 Claude Desktop 설정
 
 ```json
-// claude_desktop_config.json
+// C:\Users\<USERNAME>\AppData\Roaming\Claude\claude_desktop_config.json
 {
   "mcpServers": {
     "vizmotive": {
       "command": "python",
       "args": [
-        "C:/graphics/deepdive/Wicked-engine-Deep-Dive/vz_mcp/server.py"
+        "C:/graphics/vizmotive/my/VizMotive-Engine/vz_mcp/vz_viewer_mcp.py"
       ],
       "env": {
-        "PYTHONPATH": "C:/graphics/vizmotive/my/VizMotive-Engine/build/Release"
+        "PYTHONPATH": "C:/graphics/vizmotive/my/VizMotive-Engine/PythonBindings"
       }
     }
   }
 }
 ```
 
-### Phase 3: 통합 테스트
-
-#### 3.1 단위 테스트
+#### 4.2 테스트 시나리오
 
 ```python
-# tests/test_bindings.py
-import pytest
-import pyvizmotive as vzm
-
-def test_engine_init():
-    assert vzm.init_engine() == True
-    assert vzm.is_valid_engine() == True
-    vzm.deinit_engine()
-
-def test_scene_creation():
-    vzm.init_engine()
-    scene = vzm.new_scene("test_scene")
-    assert scene is not None
-    assert scene.get_name() == "test_scene"
-    vzm.deinit_engine()
-
-def test_camera_creation():
-    vzm.init_engine()
-    camera = vzm.new_camera("test_camera")
-    camera.set_world_pose((0, 0, 5), (0, 0, -1), (0, 1, 0))
-    pos, view, up = camera.get_world_pose()
-    assert pos == (0, 0, 5)
-    vzm.deinit_engine()
-```
-
-#### 3.2 MCP 통합 테스트
-
-```python
-# tests/test_mcp.py
-from mcp import ClientSession
+# tests/test_mcp_integration.py
+import asyncio
+from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-async def test_mcp_tools():
-    async with stdio_client("python", ["server.py"]) as (read, write):
+async def test_create_cube():
+    """Test cube creation through MCP"""
+    server_params = StdioServerParameters(
+        command="python",
+        args=["vz_viewer_mcp.py"]
+    )
+
+    async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
-            # Tool 목록 확인
+            # Initialize
+            await session.initialize()
+
+            # List available tools
             tools = await session.list_tools()
-            assert "create_scene" in [t.name for t in tools]
+            assert "create_cube" in [t.name for t in tools.tools]
 
-            # Tool 실행
-            result = await session.call_tool("create_scene", {
-                "name": "test_scene"
+            # Create a cube
+            result = await session.call_tool("create_cube", {
+                "name": "test_cube",
+                "position": [1, 2, 3]
             })
-            assert result["scene_id"] > 0
+
+            assert result.content[0].text == '{"status": "created", ...}'
 ```
 
-#### 3.3 Claude 대화 시나리오
-
-```
-User: VizMotive 엔진으로 간단한 3D 씬을 만들어줘.
-      카메라는 (0, 2, 5) 위치에서 원점을 바라보게 하고,
-      큐브 하나 추가해줘.
-
-Claude: VizMotive 엔진으로 씬을 생성하겠습니다.
-
-[MCP Tool: create_scene(name="demo_scene")]
-[MCP Tool: create_camera(name="main_cam", position=[0,2,5],
-           look_at=[0,0,0], up=[0,1,0])]
-[MCP Tool: create_geometry(name="cube", type="box",
-           size=[1,1,1])]
-[MCP Tool: create_static_mesh(name="cube_actor",
-           geometry="cube")]
-[MCP Tool: render_frame(scene="demo_scene",
-           camera="main_cam")]
-
-3D 씬을 생성했습니다:
-- Scene: demo_scene
-- Camera: (0, 2, 5) → (0, 0, 0)
-- Cube actor 추가 완료
-- 렌더링 완료
-```
+---
 
 ## 구현 우선순위
 
-### Priority 1 (핵심 기능)
-1. ✅ pybind11 설치 및 기본 설정
-2. ✅ 엔진 초기화/종료 바인딩
-3. ✅ Scene, Camera, Renderer 바인딩
-4. ✅ 기본 렌더링 파이프라인
-5. ✅ MCP 서버 기본 구조
+### Week 1: Python 바인딩
+- [x] pybind11 설치
+- [x] 기본 바인딩 코드 작성 (bind_engine.cpp)
+- [ ] VS 2026에서 CMake 프로젝트 빌드
+- [ ] Python에서 엔진 초기화 테스트
 
-### Priority 2 (확장 기능)
-1. Geometry, Material 바인딩
-2. Actor (StaticMesh, Light) 바인딩
-3. Transform 조작
-4. 모델 로딩 (OBJ, GLTF)
-5. MCP Resources 구현
+### Week 2: Python GUI 뷰어
+- [ ] DearPyGui 설치
+- [ ] 기본 GUI 창 생성
+- [ ] VizEngine 렌더링 통합
+- [ ] 간단한 씬 조작 (큐브 추가 등)
 
-### Priority 3 (고급 기능)
-1. Animation 바인딩
-2. Particle System
-3. Volume Rendering
-4. Post-processing 효과
-5. 실시간 편집 기능
+### Week 3: MCP 서버 통합
+- [ ] FastMCP 설치 및 기본 테스트
+- [ ] MCP Tools 구현 (create_cube, get_screenshot 등)
+- [ ] GUI + MCP 서버 통합
+- [ ] 스레드 안정성 확인
+
+### Week 4: Claude 연동 및 테스트
+- [ ] Claude Desktop 설정
+- [ ] 실제 대화 테스트
+- [ ] 버그 수정 및 최적화
+- [ ] 문서 작성
+
+---
 
 ## 기술적 도전 과제
 
-### 1. 메모리 관리
-- **문제**: C++ 객체의 소유권을 Python에서 관리
-- **해결**: pybind11의 `return_value_policy` 사용
-  - `reference`: C++에서 소유권 유지
-  - `take_ownership`: Python이 소유권 획득
-  - `automatic`: 자동 결정
+### 1. VizEngine 렌더링 결과를 Python GUI에 표시
 
-### 2. 타입 변환
-- **문제**: C++ 구조체 ↔ Python tuple/dict
-- **해결**: Lambda wrapper 또는 custom type caster
+**문제**: C++ DLL의 렌더링 결과를 Python GUI에 실시간 표시
 
-```cpp
-// vfloat3 → Python tuple
-py::class_<vfloat3>(m, "Float3")
-    .def(py::init<float, float, float>())
-    .def_readwrite("x", &vfloat3::x)
-    .def_readwrite("y", &vfloat3::y)
-    .def_readwrite("z", &vfloat3::z)
-    .def("__repr__", [](const vfloat3& v) {
-        return "Float3(" + std::to_string(v.x) + ", " +
-               std::to_string(v.y) + ", " + std::to_string(v.z) + ")";
-    });
+**해결 방법**:
+- **Option A**: SharedRenderTarget (DirectX 텍스처 공유) - 복잡하지만 성능 좋음
+- **Option B**: 스크린샷 파일 저장/로드 - 간단하지만 느림
+- **추천**: Option B로 시작, 나중에 Option A로 최적화
+
+### 2. MCP 서버와 GUI 메인 루프 동시 실행
+
+**문제**: MCP 서버(asyncio)와 DearPyGui(동기 루프)를 같은 프로세스에서 실행
+
+**해결 방법**:
+```python
+# MCP 서버를 별도 스레드에서 실행
+def start_mcp_server():
+    def run_mcp():
+        asyncio.run(mcp.run())
+
+    thread = threading.Thread(target=run_mcp, daemon=True)
+    thread.start()
+
+# GUI 메인 루프는 메인 스레드에서
+dpg.start_dearpygui()
 ```
 
-### 3. 멀티스레딩
-- **문제**: Python GIL vs C++ 멀티스레드 렌더링
-- **해결**:
-  - `py::gil_scoped_release` for long-running C++ calls
-  - `py::gil_scoped_acquire` for callbacks
+### 3. 스레드 안전성
 
-### 4. 에러 핸들링
-- **문제**: C++ 예외 → Python 예외
-- **해결**: pybind11 자동 변환 + custom exception
+**문제**: MCP 서버(백그라운드 스레드)가 VizEngine API 호출 시 충돌 가능
 
-```cpp
-py::register_exception<vzm::EngineException>(m, "EngineError");
+**해결 방법**:
+- Python의 threading.Lock 사용
+- VizEngine API 호출을 메인 스레드로 위임 (큐 사용)
 
-m.def("new_scene", [](const std::string& name) {
-    auto scene = vzm::NewScene(name);
-    if (!scene) {
-        throw vzm::EngineException("Failed to create scene");
-    }
-    return scene;
-});
+```python
+import queue
+
+command_queue = queue.Queue()
+
+# MCP Tool에서
+@mcp.tool()
+def create_cube(name, position):
+    command_queue.put(("create_cube", name, position))
+    return {"status": "queued"}
+
+# GUI 루프에서
+while dpg.is_dearpygui_running():
+    # 큐에서 명령 처리
+    try:
+        cmd, *args = command_queue.get_nowait()
+        if cmd == "create_cube":
+            # 메인 스레드에서 안전하게 실행
+            vzm.create_static_mesh(*args)
+    except queue.Empty:
+        pass
+
+    # 렌더링
+    renderer.render(scene, camera)
+    dpg.render_dearpygui_frame()
 ```
+
+---
 
 ## 필요한 도구 및 라이브러리
 
 ### 개발 환경
-- Visual Studio 2022 (C++17)
-- Python 3.10+
-- CMake 3.15+
+- Visual Studio 2026 Insiders (C++17)
+- Python 3.13+
+- VizMotive Engine (이미 빌드됨)
 
 ### Python 라이브러리
 ```txt
 # requirements.txt
-pybind11>=2.11.0
+pybind11>=3.0.0
+dearpygui>=1.11.0
 fastmcp>=0.1.0
+Pillow>=10.0.0          # 이미지 로드
 numpy>=1.24.0
 pytest>=7.4.0
+pytest-asyncio>=0.21.0
 ```
 
-### C++ 라이브러리
-- pybind11 (헤더 온리)
-- VizMotive EngineCore
-
-## 개발 로드맵
-
-### Week 1-2: Python 바인딩 기초
-- [ ] pybind11 설치 및 CMake 설정
-- [ ] 엔진 초기화 API 바인딩
-- [ ] Scene, Camera, Renderer 기본 바인딩
-- [ ] 단위 테스트 작성
-
-### Week 3-4: MCP 서버 구현
-- [ ] FastMCP 설정
-- [ ] 기본 Tools 구현 (create_scene, create_camera, render)
-- [ ] MCP 서버 테스트
-- [ ] Claude Desktop 연동
-
-### Week 5-6: 확장 및 최적화
-- [ ] Geometry, Material 바인딩
-- [ ] Actor 생성 및 조작
-- [ ] 모델 로딩 기능
-- [ ] 성능 최적화 및 에러 핸들링
-
-### Week 7-8: 문서화 및 배포
-- [ ] API 문서 작성
-- [ ] 튜토리얼 작성
-- [ ] 예제 코드
-- [ ] 패키징 (PyPI 배포 고려)
-
-## 참고 자료
-
-### pybind11
-- 공식 문서: https://pybind11.readthedocs.io/
-- 예제: https://github.com/pybind/python_example
-
-### MCP
-- MCP 사양: https://modelcontextprotocol.io/
-- FastMCP: https://github.com/jlowin/fastmcp
-- MCP Python SDK: https://github.com/anthropics/anthropic-sdk-python
-
-### 유사 프로젝트
-- PyOpenGL: OpenGL Python 바인딩
-- PyVista: VTK Python 래퍼
-- Blender Python API: bpy
-
-## 다음 단계
-
-1. **환경 설정**: pybind11 및 FastMCP 설치
-2. **첫 바인딩**: `InitEngineLib`, `NewScene` 바인딩
-3. **테스트**: Python에서 엔진 초기화 테스트
-4. **MCP 프로토타입**: 간단한 MCP 서버 작성
-5. **반복 개발**: 점진적으로 API 확장
+### 설치 방법
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
-*작성일: 2026-01-09*
+## 다음 단계
+
+1. ✅ **pybind11 설치 완료**
+2. ✅ **바인딩 코드 작성 완료**
+3. **VS 2026에서 CMake 빌드** ← 여기부터 시작!
+4. **Python에서 엔진 초기화 테스트**
+5. **DearPyGui 기본 GUI 작성**
+6. **MCP 서버 통합**
+
+---
+
+*작성일: 2026-01-12*
 *작성자: Claude Sonnet 4.5 with User*
+*방식: Blender MCP 동일 구조 (Python GUI + MCP 서버 통합)*
