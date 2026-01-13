@@ -2,6 +2,8 @@
 
 ## 개요
 
+![alt text](image-1.png)
+
 VizMotive Engine을 **Blender MCP와 동일한 방식**으로 통합합니다. Python GUI 프로그램(뷰어)에서 MCP 서버를 실행하여 Claude가 **실시간으로 3D 씬을 제어하고 확인**할 수 있도록 합니다.
 
 ## 핵심 아키텍처 (Blender MCP 방식)
