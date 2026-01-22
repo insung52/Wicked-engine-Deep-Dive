@@ -85,7 +85,7 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 ## 2. Capsule shadows (#1055)
 **커밋:** `545e859c`
 
-**[x] VizMotive에 이미 구현됨**
+**VizMotive 미구현**
 
 ### 설명
 캡슐 형태의 그림자를 통해 캐릭터(Humanoid) 등의 부드러운 접지 그림자를 구현하는 기능입니다.
@@ -108,18 +108,27 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 
 ### VizMotive Engine 비교 분석
 
-**결론: VizMotive Engine에 이미 구현되어 있음**
+**결론: VizMotive Engine에 완전히 구현되어 있지 않음!**
 
-Capsule Shadow는 DDGI의 Dominant Light Direction(DLD)을 occlusion cone 방향으로 사용합니다.
+| 구성요소 | Wicked | VizMotive |
+|---------|--------|-----------|
+| `capsuleShadowHF.hlsli` 파일 | ✅ | ✅ |
+| `directionalOcclusionCapsule()` 함수 | ✅ | ✅ |
+| TiledLighting 적용 코드 | ✅ | ❌ |
+| `forces()` capsule collider 처리 | ✅ | ❌ |
 
-두 엔진 모두 `shadingHF.hlsli`에서 동일한 방식으로 구현:
+VizMotive에는 셰이더 파일(`capsuleShadowHF.hlsli`)만 있고, 실제로 `TiledLighting`에서 적용하는 통합 코드가 없음:
 ```hlsl
-// Capsule Shadow: DLD를 occlusion cone으로 사용
-half4 occlusion_cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
-half4 reflection_cone = half4(surface.R, max(0.01, surface.roughness));
+// Wicked Engine만 있는 코드 (shadingHF.hlsli:562-621)
+if ((GetFrame().options & OPTION_BIT_CAPSULE_SHADOW_ENABLED) && !forces().empty())
+{
+    half4 occlusion_cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
+    // ... capsule shadow 계산 ...
+    surface.occlusion *= capsuleshadow;  // VizMotive에 없음!
+}
 ```
 
-이 구현은 커밋 #5의 SH 기반 DLD 추출과 연계되어 작동합니다.
+**VizMotive에 이 기능을 추가하려면 이 커밋을 참고해야 함.**
 
 ---
 
@@ -217,30 +226,35 @@ if (GetScene().ddgi.probe_buffer >= 0)
 3. `BRDF_GetSpecular()`로 스펙큘러 계산
 4. `lighting.indirect.specular`에 추가
 
-#### 3. VizMotive만의 추가 개선사항
-
-| 기능 | Wicked | VizMotive |
-|------|--------|-----------|
-| Float 정밀도 버전 | ❌ | ✅ `ddgi_sample_irradiance_float()` |
-| Variance 최적화 | ❌ | ✅ `if (variance > 0.001)` 체크 |
-| DLD 아티팩트 주석 | 간단 | 상세 ("stickman" 아티팩트 설명) |
-
-**결론: 이 커밋의 모든 기능이 VizMotive에 이미 구현되어 있으며, VizMotive 버전이 일부 최적화가 추가되어 더 발전된 상태입니다.**
+VizMotive 는 이후 커밋 ## 14. raytracing fixes 를 적용한 상태로, 일부 최적화가 추가되었습니다.
 
 ---
 
 ## 6. ddgi backface pulling leak improvement
 **커밋:** `3dfd5787`
 
-**[ ] CHECKOUT 필요 - Major GI 시스템 개선**
+**[x] VizMotive에 이미 구현됨 (DDGI만)**
 
 ### 설명
-DDGI 백페이스 풀링 시 발생하는 빛 누수(leak) 현상 개선.
+DDGI 프로브가 벽 내부에 있을 때 빛이 벽을 통과해 새어나가는 현상(light leak) 개선.
+
+### 핵심 변경
+1. **Face Culling 비활성화**: `RAY_FLAG_CULL_BACK/FRONT_FACING_TRIANGLES` 주석 처리
+2. **Backface Hit 시 Depth 축소**: 프로브를 안쪽으로 밀어넣음
+```hlsl
+if (surface.IsBackface()) {
+    hit_depth *= 0.9; // DDGI (Surfel은 0.5)
+}
+```
 
 ### 주요 변경사항
 - `ddgi_raytraceCS.hlsl`: 백페이스 처리 개선
 - `surfel_raytraceCS.hlsl`: Surfel GI도 동일 개선
 - `wiScene.cpp`: 씬 처리 수정
+
+### VizMotive 비교
+- DDGI: ✅ 동일하게 구현됨
+- Surfel GI: ❌ VizMotive에 Surfel GI 미구현
 
 ### 변경 파일 (5개)
 
@@ -298,6 +312,8 @@ WickedEngine/wiJobSystem.cpp | 1 +
 ### 설명
 GitHub Actions 빌드에서 바이러스 오탐지 문제 해결을 위해 UPX 압축 제거.
 
+- UPX (Ultimate Packer for eXecutables) = 실행 파일 압축 도구
+
 ### 주요 변경사항
 - `.github/workflows/*.yml`: UPX 관련 코드 모두 제거
 
@@ -325,6 +341,17 @@ CMake 최소 버전을 3.19로 상향. 해당 버전 이전에서 지원하지 �
 ### 설명
 Address Sanitizer 지원을 위한 wiScene 수정.
 
+Address Sanitizer (ASan)란?
+
+메모리 버그 탐지 도구:
+- 버퍼 오버플로우
+- Use-after-free
+- 초기화되지 않은 메모리 접근
+- 메모리 릭
+
+#### 컴파일 시 활성화
+g++ -fsanitize=address -g main.cpp
+
 ### 주요 변경사항
 - `wiScene.cpp`: ASan 호환성 코드 추가 (11줄)
 
@@ -348,15 +375,70 @@ Vulkan vkWaitForFences 타임아웃 값 수정.
 ## 14. raytracing fixes
 **커밋:** `0070de66`
 
-**[ ] CHECKOUT 필요 - 시스템 개선**
+**[x] VizMotive에 이미 구현됨**
 
 ### 설명
-레이트레이싱 관련 버그 수정.
+레이트레이싱 관련 버그 수정. 두 가지 핵심 문제 해결:
+1. Ray Direction 정규화 누락
+2. half 정밀도로 인한 GI 품질 저하
+
+### 핵심 변경 1: Ray Direction 정규화
+
+DXR/Vulkan Ray Tracing에서 `RayDesc.Direction`은 **반드시 단위 벡터(길이=1)**여야 함.
+
+**변경 전 (버그):**
+```hlsl
+newRay.Direction = L;
+newRay.Direction = L + max3(surface.sss);
+ray.Direction = sample_hemisphere_cos(surface.N, rng);
+```
+
+**변경 후 (수정):**
+```hlsl
+newRay.Direction = normalize(L);
+newRay.Direction = normalize(L + max3(surface.sss));
+ray.Direction = normalize(sample_hemisphere_cos(surface.N, rng));
+```
+
+정규화 안 된 방향 벡터 사용 시:
+- `TMax` 거리 계산 오류 → 잘못된 히트 판정
+- 특히 `L + max3(surface.sss)` (SSS 오프셋) 결과는 절대 정규화되지 않음
+
+### 핵심 변경 2: half → float 정밀도
+
+**변경 전:**
+```hlsl
+half energy_conservation = 0.95;
+half3 ddgi = ddgi_sample_irradiance(...);
+```
+
+**변경 후:**
+```hlsl
+float energy_conservation = 0.95;
+float3 ddgi = ddgi_sample_irradiance(...);
+```
+
+| 타입 | 비트 | 정밀도 | 문제점 |
+|-----|-----|-------|-------|
+| `half` | 16-bit | ~3자리 | 색상 밴딩, 에너지 누적 오차 |
+| `float` | 32-bit | ~7자리 | 없음 |
 
 ### 주요 변경사항
-- `ddgi_raytraceCS.hlsl`: DDGI RT 수정
-- `surfel_raytraceCS.hlsl`: Surfel RT 수정
-- `renderlightmapPS.hlsl`: 라이트맵 렌더링 수정
+- `ddgi_raytraceCS.hlsl`: normalize 3곳 + float 2곳
+- `surfel_raytraceCS.hlsl`: normalize 2곳 + float 1곳
+- `renderlightmapPS.hlsl`: normalize 1곳
+
+### VizMotive 비교
+
+| 수정 사항 | Wicked | VizMotive |
+|----------|--------|-----------|
+| `normalize(L)` | ✅ | ✅ |
+| `normalize(raydir)` | ✅ | ✅ |
+| `normalize(L + max3(surface.sss))` | ✅ | ✅ |
+| `float energy_conservation` | ✅ | ✅ |
+| `float3 ddgi` | ✅ | ✅ |
+
+**결론: 모든 수정사항이 VizMotive에 이미 반영되어 있음.**
 
 ### 변경 파일 (4개)
 
@@ -435,14 +517,55 @@ Linux에서 Vulkan 리소스 앨리어싱 비활성화. 간헐적 unknown error 
 ## 20. added some safety GPU resource clears
 **커밋:** `872cac1c`
 
+**[x] VizMotive가 더 발전된 상태**
+
 ### 설명
-GPU 리소스 안전 초기화 추가.
+GPU 리소스 안전 초기화 추가. 초기화되지 않은 GPU 메모리 사용으로 인한 아티팩트 및 GPU hang 방지.
+
+### 핵심 문제
+- GPU 메모리는 기본적으로 초기화되지 않음
+- 이전 프레임 데이터나 랜덤 값이 남아있을 수 있음
+- 특히 Xbox에서 GPU hang 발생 가능
 
 ### 주요 변경사항
-- `wiRenderer.cpp`: 대폭 리팩토링 (332줄 수정, 실제로는 감소)
-- `wiScene.cpp`: 씬 관련 안전 초기화
+
+**1. DDGI 버퍼 제로 초기화:**
+```cpp
+wi::vector<uint8_t> zerodata;
+zerodata.resize(buf.size);
+device->CreateBuffer(&buf, zerodata.data(), &ddgi.ray_buffer);  // 0으로 초기화
+```
+
+**2. 렌더링 전 ClearUAV 추가:**
+```cpp
+device->ClearUAV(res.depthbuffer, 0, cmd);
+device->ClearUAV(res.lineardepth, 0, cmd);
+device->ClearUAV(&res.texture_normals, 0, cmd);
+device->ClearUAV(&res.texture_roughness, 0, cmd);
+// ...
+```
+
+**3. Barrier 코드 단순화**
+
+### VizMotive 비교
+
+| 기능 | Wicked (커밋 #20) | VizMotive |
+|------|------------------|-----------|
+| DDGI 버퍼 제로 초기화 | ✅ 수동 zerodata | ✅ `CreateBufferZeroed()` 헬퍼 |
+| ClearUAV 사용 | ✅ 다수 추가 | ✅ 일부 사용 |
+| 제로 버퍼 헬퍼 함수 | ❌ (커밋 #30에서 추가) | ✅ 이미 있음 |
+
+**VizMotive는 `CreateBufferZeroed()` 헬퍼 함수가 이미 있어 더 깔끔한 코드:**
+```cpp
+// VizMotive (SceneUpdate_Detail.cpp)
+device->CreateBufferZeroed(&buf, &ddgi.rayBuffer);
+device->CreateBufferZeroed(&buf, &ddgi.varianceBuffer);
+device->CreateBufferZeroed(&buf, &ddgi.probeBuffer);
+```
 
 ### 변경 파일 (3개)
+- `wiRenderer.cpp`: ClearUAV 추가 + Barrier 단순화
+- `wiScene.cpp`: DDGI 버퍼 제로 초기화
 
 ---
 
@@ -520,11 +643,15 @@ Vulkan 타임아웃 리포팅 및 추가 안전성 조치.
 **커밋:** `8b9e2ce6`
 
 ### 설명
-디버그 셰이더의 테셀레이션 호환성 수정.
+디버그용 심플 셰이더에서 테셀레이션 사용 시 호환성 문제 수정.
 
-### 주요 변경사항
-- `objectPS_simple.hlsl`: 수정 (1줄)
-- `objectVS_simple.hlsl`: 수정 (1줄)
+### 변경 내용
+```hlsl
+// objectPS_simple.hlsl, objectVS_simple.hlsl
+#define OBJECTSHADER_USE_NORMAL // tessellation compat!
+```
+
+테셀레이션 셰이더는 노멀 데이터가 필요한데, 심플 셰이더에 이 매크로가 없어서 호환 안 됨.
 
 ### 변경 파일 (2개)
 
@@ -547,10 +674,12 @@ Vulkan GPU 큐 동기화를 다음 프레임 제출로 지연.
 **커밋:** `39847415`
 
 ### 설명
-DX12 GPU validation 관련 작은 이슈 수정.
+DX12 GPU Validation 오류 수정. 리소스 상태 전환(Barrier) 누락 및 불필요한 플래그 제거.
 
-### 주요 변경사항
-- `wiRenderer.cpp`: 수정 (3줄)
+- `BUFFERTYPE_INDIRECT_DEBUG_0`: `UpdateBuffer()` 전에 `COPY_SRC` 상태로 전환하는 Barrier 추가
+- `BUFFERTYPE_INDIRECT_DEBUG_1`: 불필요한 `COPY_SRC` 플래그 제거
+
+실제 동작에는 영향 없고, GPU Validation 디버깅 시 오류 메시지 제거용.
 
 ### 변경 파일 (1개)
 
@@ -559,12 +688,47 @@ DX12 GPU validation 관련 작은 이슈 수정.
 ## 29. dx12 separated cpu and gpu fences for improved safety
 **커밋:** `93ebdaa6`
 
+**[ ] VizMotive 미적용 - 적용 고려 필요**
+
 ### 설명
-DX12에서 CPU/GPU 펜스 분리로 안전성 향상.
+DX12에서 CPU/GPU 펜스를 분리하여 경쟁 조건(Race Condition) 방지.
+
+### 배경: Fence란?
+GPU-CPU 동기화 메커니즘. GPU 작업 완료 시 펜스 값 증가(Signal), CPU나 다른 큐가 대기(Wait).
+
+### 문제점: 단일 펜스 사용
+```cpp
+// 기존: 하나의 펜스를 두 용도로 사용
+frame_fence[BUFFERCOUNT][QUEUE_COUNT];
+
+// 용도 1: CPU 대기 (값: 1)
+// 용도 2: GPU 큐 간 대기 (값: FRAMECOUNT)
+// → 경쟁 조건 발생 가능
+```
+
+### 해결: 펜스 분리
+```cpp
+// 변경 후
+frame_fence_cpu[BUFFERCOUNT][QUEUE_COUNT];  // CPU 대기 전용
+frame_fence_gpu[BUFFERCOUNT][QUEUE_COUNT];  // GPU 큐 간 대기 전용
+
+// Signal
+queue.queue->Signal(frame_fence_cpu[...].Get(), 1);
+queue.queue->Signal(frame_fence_gpu[...].Get(), FRAMECOUNT);
+```
+
+### VizMotive 비교
+
+| 항목 | Wicked (커밋 후) | VizMotive |
+|------|-----------------|-----------|
+| 펜스 구조 | `frame_fence_cpu` + `frame_fence_gpu` | `frame_fence` (단일) |
+| 경쟁 조건 | 해결 | 잠재적 문제 |
+
+**VizMotive는 단일 펜스 구조 유지 중. DX12에서 간헐적 hang 발생 시 이 변경 적용 고려.**
 
 ### 주요 변경사항
 - `wiGraphicsDevice_DX12.cpp`: 펜스 분리 구현 (41줄)
-- `wiGraphicsDevice_DX12.h`: 관련 멤버 수정
+- `wiGraphicsDevice_DX12.h`: 펜스 멤버 2개로 분리
 
 ### 변경 파일 (3개)
 
@@ -605,11 +769,17 @@ PlayStation 터치패드 버튼 지원 추가.
 **커밋:** `b588a8b7`
 
 ### 설명
-FBX, GLTF 모델 임포터 버그 수정.
+FBX/GLTF 임포터에서 무효한 휴머노이드 제거 시 루프 버그 수정.
 
-### 주요 변경사항
-- `ModelImporter_FBX.cpp`: FBX 임포터 수정 (9줄)
-- `ModelImporter_GLTF.cpp`: GLTF 임포터 수정 (9줄)
+```cpp
+// 변경 전: 인덱스로 제거 (버그)
+scene.humanoids.Remove(i);
+
+// 변경 후: 엔티티로 제거 + 루프 인덱스 처리 수정
+scene.humanoids.Remove(scene.humanoids.GetEntity(i));
+```
+
+컬렉션 순회 중 삭제 시 인덱스 처리 오류로 인한 잘못된 동작 수정.
 
 ### 변경 파일 (2개)
 
