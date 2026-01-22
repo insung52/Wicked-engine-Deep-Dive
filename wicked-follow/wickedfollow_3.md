@@ -64,7 +64,6 @@
 ## 1. Vehicle physics (#1053)
 **커밋:** `4357dc5b`
 **날짜:** 2025년 3월 초
-**[ ] CHECKOUT 필요 - Major 신규 기능**
 
 ### 설명
 Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 추가.
@@ -85,10 +84,13 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 
 ## 2. Capsule shadows (#1055)
 **커밋:** `545e859c`
+
 **[ ] CHECKOUT 필요 - Major 렌더링 기능**
 
 ### 설명
-캡슐 형태 오브젝트(캐릭터 등)에 대한 그림자 기능 추가. 캐릭터의 부드러운 그림자 표현에 유용.
+캡슐 형태의 그림자를 통해 캐릭터(Humanoid) 등의 부드러운 접지 그림자를 구현하는 기능입니다.
+
+기존 섀도우 맵 방식과 달리, 캡슐 기하학적 형태를 이용한 Ambient Occlusion 스타일의 soft shadow입니다.
 
 ### 주요 변경사항
 - `capsuleShadowHF.hlsli`: 새로운 캡슐 그림자 셰이더 헤더 (69줄)
@@ -106,6 +108,7 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 
 ## 3. Fix Lua stack overflow vulnerability (#1054)
 **커밋:** `fdaf5ed7`
+
 **[x] CHECKOUT 필요 - 치명적 보안 버그 수정**
 
 ### 설명
