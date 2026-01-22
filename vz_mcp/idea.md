@@ -8,10 +8,6 @@ mcp 화
 
 gui 에서 스크롤 해도 렌더링 창이 같이 확대 축소됨.
 
-뷰어 실행시 ddgi 꺼진 상태 기본값으로
-
-directional light 방향조절 gui
-
 scene 저장
 
 개발 문서 최신화
@@ -35,7 +31,7 @@ r10g10b10a2 는 alpha 가 적은 정확도로 필요할때
 최종 색감 필터가 있음
 swap chain 
 
-pyimgui
+pyimgui : opengl 만 가능함
 같은 gpu 디바이스로 memory share 가능?
 논리 체계는 다를 수 있음
 렌더 out - gpu 메모리에 texture handler -> imgui 가 그걸 읽어서 바로 출력
