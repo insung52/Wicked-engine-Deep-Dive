@@ -803,7 +803,6 @@ scene.humanoids.Remove(scene.humanoids.GetEntity(i));
 
 ## 34. Jolt: update to v5.3.0 (#1070)
 **커밋:** `506749de`
-**[ ] CHECKOUT 필요 - Major 의존성 업데이트**
 
 ### 설명
 Jolt Physics 엔진을 v5.3.0으로 업데이트. 많은 변경 사항 포함.
@@ -847,15 +846,37 @@ Jolt Physics 엔진을 v5.3.0으로 업데이트. 많은 변경 사항 포함.
 ## 36. improved stencil composition for renderpath2D
 **커밋:** `0da0f3b5`
 
-### 설명
-RenderPath2D에서 스텐실 합성 개선.
+**[ ] VizMotive 미구현**
 
-### 주요 변경사항
-- `wiRenderPath2D.cpp`: 대폭 리팩토링 (216줄 수정)
-- `wiRenderer.cpp`: 스텐실 관련 함수 추가 (228줄)
-- `wiRenderer.h`: 새로운 인터페이스 (14줄)
-- `extractStencilBitPS.hlsl`: 새로운 셰이더 (12줄)
-- `copyStencilBitPS.hlsl`: 개선 (37줄)
+### 설명
+RenderPath2D에서 스텐실 합성 기능 개선. 스케일링 및 MSAA 지원 추가.
+
+### 새로 추가된 함수
+```cpp
+// 입력 마스크를 현재 렌더패스 스텐실로 스케일링
+void ScaleStencilMask(const Viewport& vp, const Texture& input, CommandList cmd);
+
+// 뎁스 스텐실에서 스텐실을 R8_UINT 텍스처로 추출
+void ExtractStencil(const Texture& input_depthstencil, const Texture& output, CommandList cmd);
+```
+
+### 셰이더 변경
+- `extractStencilBitPS.hlsl`: 새 셰이더 - 스텐실 비트 → 컬러 이미지 추출
+- `copyStencilBitPS.hlsl`: MSAA 지원 + UV 기반 스케일링 추가
+
+### 배경: Vulkan 호환성
+Vulkan에서 `CopyTexture(COLOR → STENCIL)` 미지원으로 셰이더 기반 워크어라운드 필요.
+
+### VizMotive 비교
+
+| 기능 | Wicked | VizMotive |
+|------|--------|-----------|
+| `ScaleStencilMask()` | ✅ | ❌ |
+| `ExtractStencil()` | ✅ | ❌ |
+| 스텐실 스케일링 | ✅ | ❌ |
+| MSAA 스텐실 지원 | ✅ | ❌ |
+
+**VizMotive의 RenderPath2D에는 스텐실 합성 관련 코드가 없음.**
 
 ### 변경 파일 (15개)
 
@@ -877,8 +898,143 @@ RenderPath2D에서 스텐실 합성 개선.
 ## 38. HDR improvements
 **커밋:** `4f503da8`
 
+**[ ] VizMotive 미적용**
+
 ### 설명
-HDR 관련 개선 사항.
+HDR10 디스플레이에서 UI 블렌딩이 올바르게 작동하도록 color space 변환 파이프라인 개선.
+
+### 배경 지식: Color Space와 블렌딩
+
+#### 1. 왜 Linear Space에서 블렌딩해야 하는가?
+
+```
+sRGB (감마 보정된 색) → 모니터가 기대하는 형식
+Linear (물리적으로 정확한 빛) → 수학적 연산이 올바른 공간
+```
+
+**문제 예시: 50% 투명도로 흰색과 검정색 블렌딩**
+```
+sRGB 공간에서:  (1.0 + 0.0) / 2 = 0.5 (sRGB) → 실제로는 21.8% 밝기로 보임 (너무 어두움)
+Linear 공간에서: (1.0 + 0.0) / 2 = 0.5 (Linear) → 50% 밝기로 올바르게 보임
+```
+
+그래서 블렌딩은 **반드시 Linear space에서** 해야 자연스러움.
+
+#### 2. HDR10 디스플레이의 색 공간
+
+```
+일반 모니터:  sRGB (Rec.709 색역, 감마 2.2 커브)
+HDR10 모니터: Rec.2020 색역 + ST.2084 PQ 커브 (더 넓은 색역, 더 밝은 밝기)
+```
+
+UI 텍스처/폰트는 보통 **sRGB로 저작**됨. HDR10 출력 시 변환 필요:
+1. sRGB → Linear (감마 제거)
+2. Rec.709 → Rec.2020 (색역 변환)
+3. Linear → PQ 커브 적용 (ST.2084)
+
+#### 3. 기존 문제: if-else if 구조
+
+```hlsl
+// 기존 코드 (VizMotive 현재 상태)
+if (HDR10_플래그) {
+    // 바로 HDR10으로 변환 후 출력
+    color = REC709toREC2020(color);
+    color = ApplyPQCurve(color);
+}
+else if (LINEAR_플래그) {
+    // Linear로만 변환
+    color = RemoveSRGBCurve(color);
+}
+```
+
+**문제점:**
+- HDR10 모드에서 UI 요소 A, B를 블렌딩할 때:
+  - A: sRGB → HDR10 (PQ 커브 적용됨)
+  - B: sRGB → HDR10 (PQ 커브 적용됨)
+  - 블렌딩: **비선형 PQ 공간에서 발생** → 색이 부자연스러움
+
+```
+[UI A (sRGB)] → [HDR10 변환] → 출력
+                      ↓
+              [블렌딩] ← 비선형 공간! 잘못됨
+                      ↑
+[UI B (sRGB)] → [HDR10 변환] → 출력
+```
+
+### 핵심 변경 1: Color Space 변환 분기 분리
+
+**변경 후 (Wicked Engine):**
+```hlsl
+// 별도 if 브랜치 → 순차 적용 가능
+if (LINEAR_플래그) {
+    color = RemoveSRGBCurve(color);  // 1단계: Linear로 변환
+    color *= hdr_scaling;
+}
+
+if (HDR10_플래그) {
+    color = REC709toREC2020(color);  // 2단계: HDR10으로 변환
+    color = ApplyPQCurve(color);
+}
+```
+
+**이제 가능한 시나리오:**
+
+| 플래그 조합 | 동작 | 용도 |
+|------------|------|------|
+| LINEAR만 | sRGB → Linear | 중간 버퍼에 Linear로 출력 (블렌딩용) |
+| HDR10만 | 직접 HDR10 변환 | 이미 Linear인 입력을 HDR10으로 |
+| 둘 다 | sRGB → Linear → HDR10 | 완전한 파이프라인 |
+
+### 핵심 변경 2: 중간 렌더 타겟 (rendertargetPreHDR10)
+
+```
+[올바른 파이프라인]
+
+[UI A (sRGB)] → [Linear 변환] ─┐
+                               ├→ [Linear 버퍼에서 블렌딩] → [HDR10 변환] → 최종 출력
+[UI B (sRGB)] → [Linear 변환] ─┘
+```
+
+- `rendertargetPreHDR10`: Linear space 중간 버퍼
+- 모든 UI를 Linear space에서 먼저 합성
+- 최종적으로 한 번에 HDR10 변환
+
+### 핵심 변경 3: Premultiplied Alpha
+
+```hlsl
+// fontPS.hlsl에 추가됨
+color.rgb *= color.a; // premultiplied blending
+```
+
+**일반 Alpha 블렌딩:**
+```
+result = src.rgb * src.a + dst.rgb * (1 - src.a)
+```
+
+**Premultiplied Alpha 블렌딩:**
+```
+// src.rgb가 이미 alpha와 곱해져 있음
+result = src.rgb + dst.rgb * (1 - src.a)
+```
+
+**왜 HDR에서 중요한가?**
+
+일반 알파 블렌딩은 Linear space에서 반투명 가장자리에 **검은 테두리(dark halo)** 발생:
+- 반투명 픽셀: `rgb=(1,1,1), a=0.1` (거의 투명한 흰색)
+- sRGB에서 블렌딩하면 괜찮아 보이지만
+- Linear에서 블렌딩하면 가장자리가 어두워짐
+
+Premultiplied alpha는 이 문제를 해결함.
+
+### VizMotive 비교
+
+| 항목 | Wicked Engine | VizMotive |
+|------|--------------|-----------|
+| Color space 분기 구조 | 별도 `if` (순차 적용) | `if-else if` (택일) |
+| fontPS premultiplied | ✅ `color.rgb *= color.a` | ❌ 없음 |
+| 중간 렌더 타겟 (`rendertargetPreHDR10`) | ✅ | ❌ 없음 |
+
+**VizMotive에서 HDR10 블렌딩 품질 개선 시 이 변경 적용 필요.**
 
 ### 주요 변경사항
 - `wiApplication.cpp`: HDR 처리 개선 (151줄)
@@ -896,11 +1052,25 @@ HDR 관련 개선 사항.
 **커밋:** `8182c33a`
 
 ### 설명
-RenderPath2D의 ResizeBuffers를 Update 대신 PreRender에서 호출하도록 변경.
+`ResizeBuffers()` 호출 시점을 `Update()` → `PreRender()`로 이동.
 
-### 주요 변경사항
-- `wiRenderPath2D.cpp`: 호출 시점 변경 (26줄)
-- `wiApplication.cpp`: 관련 수정 (40줄)
+### 변경 이유
+| 단계 | 역할 |
+|------|------|
+| `Update()` | 로직 업데이트 (게임 로직, UI 상태) |
+| `PreRender()` | **렌더링 준비** (버퍼 생성, 리사이즈) |
+
+렌더 버퍼 생성은 렌더링 준비 작업이므로 `PreRender()`가 더 적절.
+
+### 안전장치
+```cpp
+void RenderPath2D::Render() const {
+    if (!rtFinal.IsValid()) {
+        assert(0);  // PreRender 호출 안 했으면 경고
+        const_cast<RenderPath2D*>(this)->PreRender();  // fallback
+    }
+}
+```
 
 ### 변경 파일 (5개)
 
