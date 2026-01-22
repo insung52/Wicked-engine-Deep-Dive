@@ -85,12 +85,14 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 ## 2. Capsule shadows (#1055)
 **커밋:** `545e859c`
 
-**[ ] CHECKOUT 필요 - Major 렌더링 기능**
+**[x] VizMotive에 이미 구현됨**
 
 ### 설명
 캡슐 형태의 그림자를 통해 캐릭터(Humanoid) 등의 부드러운 접지 그림자를 구현하는 기능입니다.
 
 기존 섀도우 맵 방식과 달리, 캡슐 기하학적 형태를 이용한 Ambient Occlusion 스타일의 soft shadow입니다.
+
+- **[capsule shadow 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/shadow/capsule_shadow.md)**
 
 ### 주요 변경사항
 - `capsuleShadowHF.hlsli`: 새로운 캡슐 그림자 셰이더 헤더 (69줄)
@@ -104,12 +106,25 @@ Jolt 물리 엔진을 사용한 차량(Vehicle) 물리 시뮬레이션 기능 �
 - 셰이더: `capsuleShadowHF.hlsli`, `shadingHF.hlsli`, `lightCullingCS.hlsl` 등
 - WickedEngine: `wiRenderer`, `wiScene_Components`, `wiPrimitive` 등
 
+### VizMotive Engine 비교 분석
+
+**결론: VizMotive Engine에 이미 구현되어 있음**
+
+Capsule Shadow는 DDGI의 Dominant Light Direction(DLD)을 occlusion cone 방향으로 사용합니다.
+
+두 엔진 모두 `shadingHF.hlsli`에서 동일한 방식으로 구현:
+```hlsl
+// Capsule Shadow: DLD를 occlusion cone으로 사용
+half4 occlusion_cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
+half4 reflection_cone = half4(surface.R, max(0.01, surface.roughness));
+```
+
+이 구현은 커밋 #5의 SH 기반 DLD 추출과 연계되어 작동합니다.
+
 ---
 
 ## 3. Fix Lua stack overflow vulnerability (#1054)
 **커밋:** `fdaf5ed7`
-
-**[x] CHECKOUT 필요 - 치명적 보안 버그 수정**
 
 ### 설명
 Lua 스택 오버플로우 취약점 수정. 보안상 중요한 패치.
@@ -142,10 +157,14 @@ WickedEngine/LUA/ldebug.c | 6 +++++-
 ## 5. spherical harmonics (#1056)
 **커밋:** `808421db`
 
-**[ ] CHECKOUT 필요 - Major GI 시스템 개선**
+**[x] VizMotive에 이미 구현됨**
 
 ### 설명
 구면 조화 함수(Spherical Harmonics) 기반 GI 시스템 대폭 개선. DDGI와 Surfel GI 모두에 적용.
+
+기존 6*6 Octahedral 텍스처를 저장하는 대신 Spherical Harmonics L1 으로 저장.
+
+추가로 GI에서도 Specular 반사 구현.
 
 ### 주요 변경사항
 - `SH_Lite.hlsli`: 새로운 SH 라이브러리 (1029줄!)
@@ -158,6 +177,55 @@ WickedEngine/LUA/ldebug.c | 6 +++++-
 ### 변경 파일 (43개)
 - 셰이더 대량 수정: DDGI, Surfel, RT 관련 셰이더들
 - WickedEngine: `wiScene`, `wiRenderer`, `wiHelper` 등
+
+### VizMotive Engine 비교 분석
+
+**결론: VizMotive Engine에 이미 완전히 구현되어 있음**
+
+#### 1. SH 기반 DDGI 저장 방식 (구현됨)
+
+| 기능 | Wicked Engine | VizMotive Engine |
+|------|---------------|------------------|
+| SH 기반 irradiance 저장 | `SH::L1_RGB` | `SH::L1_RGB` |
+| 프로브 버퍼 구조 | `DDGIProbe.radiance` | `DDGIProbe.radiance` |
+| Irradiance 계산 | `SH::CalculateIrradiance()` | `SH::CalculateIrradiance()` |
+| Dominant Light Direction | `SH::ApproximateDirectionalLight()` | `SH::ApproximateDirectionalLight()` |
+| SH 라이브러리 | `SH_Lite.hlsli` (MJP) | `SH_Lite.hlsli` (동일) |
+
+#### 2. GI Specular 반사 (구현됨)
+
+두 엔진 모두 `shadingHF.hlsli`에서 동일한 방식으로 구현:
+
+```hlsl
+// Wicked & VizMotive 공통 구현 (shadingHF.hlsli)
+if (GetScene().ddgi.probe_buffer >= 0)
+{
+    half3 irradiance = ddgi_sample_irradiance(surface.P, surface.N,
+                         surface.dominant_lightdir, surface.dominant_lightcolor);
+
+    // Indirect Specular: DLD 방향으로 BRDF 계산
+    SurfaceToLight surface_to_light;
+    surface_to_light.create(surface, surface.dominant_lightdir);
+    lighting.indirect.specular += BRDF_GetSpecular(surface, surface_to_light)
+                                  * surface.dominant_lightcolor;
+}
+```
+
+**동작 원리:**
+1. `ddgi_sample_irradiance()` 호출 시 SH에서 Dominant Light Direction(DLD) + Color 추출
+2. DLD 방향으로 `SurfaceToLight` 생성
+3. `BRDF_GetSpecular()`로 스펙큘러 계산
+4. `lighting.indirect.specular`에 추가
+
+#### 3. VizMotive만의 추가 개선사항
+
+| 기능 | Wicked | VizMotive |
+|------|--------|-----------|
+| Float 정밀도 버전 | ❌ | ✅ `ddgi_sample_irradiance_float()` |
+| Variance 최적화 | ❌ | ✅ `if (variance > 0.001)` 체크 |
+| DLD 아티팩트 주석 | 간단 | 상세 ("stickman" 아티팩트 설명) |
+
+**결론: 이 커밋의 모든 기능이 VizMotive에 이미 구현되어 있으며, VizMotive 버전이 일부 최적화가 추가되어 더 발전된 상태입니다.**
 
 ---
 

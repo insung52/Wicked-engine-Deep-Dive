@@ -100,6 +100,8 @@ Capsule Shadow의 수학적 기반은 **Oat & Sander 2007, "Ambient Aperture Lig
 
 #### 왜 한 점만 찾으면 되는가?
 
+![alt text](image-2.png)
+
 캡슐 전체를 적분하는 대신, **빛 방향과 표면 위치를 고려했을 때 가장 그림자에 기여하는 점** 하나만 찾는다. 이 점에서의 구체 차폐가 전체 캡슐 차폐의 좋은 근사가 된다.
 
 #### 최적점 t 계산 공식
@@ -194,6 +196,8 @@ cos(θ) = d / sqrt(r² + d²)
 ---
 
 ### 3.4 단계 3: 왜 acos를 쓰는가? - Spherical Cap의 각도 표현
+
+![alt text](image-1.png)
 
 **Spherical Cap**이란 구면 위의 "모자" 형태 영역이다.
 
