@@ -1,5 +1,7 @@
 # Capsule Shadow
 
+![alt text](image-3.png)
+
 Wicked Engine의 Capsule Shadow는 Shadow Map 없이 **수학적 계산만으로** 캐릭터의 부드러운 그림자를 생성하는 기법이다.
 
 ## 목차
@@ -100,8 +102,6 @@ Capsule Shadow의 수학적 기반은 **Oat & Sander 2007, "Ambient Aperture Lig
 
 #### 왜 한 점만 찾으면 되는가?
 
-![alt text](image-2.png)
-
 캡슐 전체를 적분하는 대신, **빛 방향과 표면 위치를 고려했을 때 가장 그림자에 기여하는 점** 하나만 찾는다. 이 점에서의 구체 차폐가 전체 캡슐 차폐의 좋은 근사가 된다.
 
 #### 최적점 t 계산 공식
@@ -110,11 +110,25 @@ Capsule Shadow의 수학적 기반은 **Oat & Sander 2007, "Ambient Aperture Lig
 float3 Ld = capsuleB - capsuleA;     // 캡슐 축 벡터
 float3 L0 = capsuleA - pos;          // A에서 P로의 벡터
 
-float a = dot(cone.xyz, Ld);         // 빛 방향과 캡슐 축의 정렬도
+float a = dot(cone.xyz, Ld);         // 빛 방향(cone)과 캡슐 축의 정렬도
 float t = saturate(dot(L0, a * cone.xyz - Ld) / (dot(Ld, Ld) - a * a));
 
 float3 optimalPoint = capsuleA + t * Ld;  // 캡슐 축 위의 최적점
 ```
+
+- 빛 - P 선과 A - B 선의 교점이 존재한다면 단순히 그 교점을 계산
+
+![alt text](i1.png)
+![alt text](i2.png)
+![alt text](i3.png)
+![alt text](i4.png)
+
+교점이 존재하지 않는다면 A, B 사이로 saturate 되어 계산
+
+![alt text](o1.png)
+![alt text](o2.png)
+![alt text](o3.png)
+![alt text](o4.png)
 
 **t의 의미**:
 - t = 0 → A점이 가장 영향을 줌
@@ -123,21 +137,6 @@ float3 optimalPoint = capsuleA + t * Ld;  // 캡슐 축 위의 최적점
 
 **기하학적 해석**:
 이 공식은 "빛 방향 cone의 축"과 "P에서 캡슐을 바라보는 방향"이 가장 잘 정렬되는 캡슐 축 위의 점을 찾는다.
-
-```
-빛 방향 (cone.xyz)
-      ↘
-        A ●━━━━●━━━━━━● B
-           t=0  t=0.4  t=1
-                 ↑
-            이 점에서 빛 방향과
-            P→점 방향이 가장 비슷함
-                 │
-                 P
-
-t=0.4인 이유: 빛이 비스듬히 오므로
-중간 쪽 보다는 A쪽이 P에 더 많은 그림자를 드리움
-```
 
 ---
 

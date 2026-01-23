@@ -1,6 +1,6 @@
 # Wicked Engine 변경사항 - 2025년 3월
 
-## 목차
+## 목차, 57개 commit
 - [Vehicle physics](#1-vehicle-physics-1053)
 - [Capsule shadows](#2-capsule-shadows-1055)
 - [Fix Lua stack overflow vulnerability](#3-fix-lua-stack-overflow-vulnerability-1054)
