@@ -159,7 +159,29 @@ WickedEngine/LUA/ldebug.c | 6 +++++-
 - `character_controller.lua`: 캐릭터 컨트롤러 스크립트 개선
 - `ShaderInterop_Renderer.h`: 셰이더 인터롭 수정
 
-### 변경 파일 (6개)
+---
+
+## DDGI & Raytracing 실제 렌더링 비교 미리보기
+
+### 커밋 5번 적용 전
+
+![alt text](<스크린샷 2026-01-23 175941-1.png>)
+
+### 커밋 5번 적용 후
+
+![alt text](<스크린샷 2026-01-23 180213-1.png>)
+
+### 커밋 6번 적용 후
+
+![alt text](<스크린샷 2026-01-23 180339.png>)
+
+### 커밋 14번 적용 후
+
+![alt text](<스크린샷 2026-01-23 181243.png>)
+
+### 최신 wicked engine 결과
+
+![alt text](<스크린샷 2026-01-23 182050-1.png>)
 
 ---
 
@@ -1750,7 +1772,7 @@ void AABB::AddPoint(const XMFLOAT3& pos);  // 점 추가하며 AABB 확장
 git checkout 545e859c
 
 # Remove special character 커밋 적용 (사용자 환경용)
-git cherry-pick <remove-special-character-commit-hash>
+git cherry-pick 227de60c818b6ac7f7040161694f2b1c889bb931
 
 # 다시 master로 돌아오기
 git checkout master
