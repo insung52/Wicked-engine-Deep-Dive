@@ -1074,17 +1074,41 @@ void RenderPath2D::Render() const {
 
 ### 변경 파일 (5개)
 
+### VizMotive 비교 (커밋 #39, #40 공통)
+
+| 항목 | Wicked Engine | VizMotive |
+|------|--------------|-----------|
+| 함수명 | `ResizeBuffers()` | `ResizeResources()` |
+| 호출 시점 | `Update()` + `PreRender()` | `Render()` 내부 |
+| `PreRender()` | ✅ 있음 | ❌ 없음 |
+| 파이프라인 | 3단계 (`Update`/`PreRender`/`Render`) | 2단계 (`Update`/`Render`) |
+
+**VizMotive 방식:**
+```cpp
+void RenderPath3D::Render(const float dt) {
+    bool is_resized = UpdateResizedCanvas();
+    if (is_resized) {
+        ResizeResources();  // Render() 안에서 호출
+    }
+    // ... 렌더링 ...
+}
+```
+
+**결론:** 구조가 다르므로 직접 적용 불가. VizMotive는 자체 방식으로 처리 중.
+
 ---
 
 ## 40. fix: sometimes renderpath2d resizebuffers must happen in update
 **커밋:** `249caeca`
 
 ### 설명
-일부 경우 RenderPath2D ResizeBuffers가 Update에서 발생해야 하는 문제 수정.
+커밋 #39 후속 수정. 일부 엣지케이스에서 `Update()`에서도 `ResizeBuffers()` 필요.
 
-### 주요 변경사항
-- `wiRenderPath2D.cpp`: 조건부 처리 추가 (6줄)
-- `wiRenderPath3D.cpp`: 관련 수정 (14줄)
+### 변경 내용
+- `RenderPath2D::Update()`: `ResizeBuffers()` 호출 **다시 추가**
+- `RenderPath3D`: MSAA 체크를 `Update()` → `PreRender()`로 이동
+
+이제 `ResizeBuffers()`는 `Update()`와 `PreRender()` **둘 다에서 체크** (중복 호출은 조건문으로 방지).
 
 ### 변경 파일 (2개)
 
@@ -1107,13 +1131,83 @@ void RenderPath2D::Render() const {
 ## 42. job system updates
 **커밋:** `658697e2`
 
-### 설명
-잡 시스템 업데이트 및 개선.
+**[ ] VizMotive 미적용 - 적용 권장**
+
+### 배경: 잡 시스템(Job System)이란?
+
+**멀티스레드 작업 분배 시스템**. CPU 코어를 최대한 활용하기 위한 핵심 인프라.
+
+```
+[메인 스레드]
+     │
+     ├─ 작업1 → [워커 스레드 1]  (물리 계산)
+     ├─ 작업2 → [워커 스레드 2]  (애니메이션)
+     ├─ 작업3 → [워커 스레드 3]  (컬링)
+     └─ 작업4 → [워커 스레드 4]  (파티클)
+
+     ... Wait(): 모든 작업 완료 대기 ...
+
+[메인 스레드 계속]
+```
 
 ### 주요 변경사항
-- `wiJobSystem.cpp`: 잡 시스템 개선 (62줄)
-- `wiJobSystem.h`: 인터페이스 수정 (5줄)
-- `wiLoadingScreen.cpp`: 로딩 스크린 수정
+
+#### 1. 카운터 타입 현대화
+```cpp
+// 변경 전
+volatile long counter = 0;
+AtomicAdd(&ctx.counter, 1);
+
+// 변경 후
+std::atomic<uint32_t> counter{ 0 };
+ctx.counter.fetch_add(1);
+```
+
+#### 2. Condition Variable 분리
+```cpp
+// 변경 전: 하나로 모든 용도
+std::condition_variable wakeCondition;
+
+// 변경 후: 역할별 분리
+std::condition_variable sleepingCondition;  // 워커 스레드 깨우기용
+std::condition_variable waitingCondition;   // Wait() 호출자 알림용
+```
+
+#### 3. Wait() 효율 개선 (핵심!)
+```cpp
+// 변경 전: spin wait (CPU 100% 사용하며 대기)
+while (IsBusy(ctx)) {
+    std::this_thread::yield();
+}
+
+// 변경 후: proper blocking (CPU 거의 사용 안 함)
+while (IsBusy(ctx)) {
+    res.waitingCondition.wait(lock, [&ctx] { return !IsBusy(ctx); });
+}
+```
+
+| 방식 | CPU 사용 | 설명 |
+|------|---------|------|
+| spin wait (yield) | **높음** | 계속 폴링하며 대기 |
+| condition_variable | **낮음** | OS가 깨워줄 때까지 sleep |
+
+#### 4. 새 함수 추가
+```cpp
+uint32_t GetRemainingJobCount(const context& ctx);
+```
+
+### VizMotive 비교
+
+| 항목 | Wicked (커밋 후) | VizMotive |
+|------|-----------------|-----------|
+| 카운터 타입 | `std::atomic<uint32_t>` | `volatile long` |
+| 원자적 연산 | `fetch_add()`, `load()` | `AtomicAdd()`, `AtomicLoad()` |
+| Condition Variable | 2개 분리 | 1개 (`wakeCondition`) |
+| Wait() 방식 | **blocking** | **spin wait** |
+
+**VizMotive는 이전 Wicked 방식 그대로. Wait() 시 CPU 낭비 발생.**
+
+적용 시 Wait() 호출 시 CPU 효율 향상 기대.
 
 ### 변경 파일 (4개)
 
@@ -1175,17 +1269,80 @@ DX12 및 Vulkan 개선 사항.
 
 ## 47. camera render texture can be set to material
 **커밋:** `b1b708d2`
-**[ ] CHECKOUT 필요 - Major 신규 기능**
+
+**[ ] VizMotive 미구현 - Major 신규 기능**
 
 ### 설명
-카메라 렌더 텍스처를 머티리얼에 설정할 수 있는 기능 추가. 보안 카메라, 거울 등 구현 가능.
+카메라가 렌더링한 결과를 텍스처로 만들어 머티리얼에 적용하는 기능.
 
-### 주요 변경사항
-- `wiRenderPath3D.cpp`: 카메라 렌더 텍스처 기능 구현 (197줄)
-- `CameraComponentWindow.cpp`: 에디터 UI (142줄)
-- `MaterialWindow.cpp`: 머티리얼에 카메라 텍스처 설정 (35줄)
-- `wiScene_Components.h`: 관련 컴포넌트 추가 (15줄)
-- `wiScene_Serializers.cpp`: 직렬화 지원 (20줄)
+### 용도
+```
+┌─────────────────┐
+│   게임 화면     │
+│  ┌──────────┐   │
+│  │ TV 모니터 │ ← 다른 카메라가 렌더링한 장면
+│  │ (CCTV)   │
+│  └──────────┘   │
+└─────────────────┘
+```
+
+- **보안 카메라 (CCTV)**: 모니터에 다른 시점 표시
+- **거울**: 반사 효과
+- **포탈**: 다른 공간 미리보기
+- **TV/스크린**: 실시간 영상 표시
+
+### 핵심 구조
+
+#### 1. MaterialComponent에 카메라 참조 추가
+```cpp
+struct MaterialComponent {
+    wi::ecs::Entity cameraSource = INVALID_ENTITY;  // 텍스처 소스 카메라
+};
+```
+
+#### 2. CameraComponent에 렌더 타겟 추가
+```cpp
+struct CameraComponent {
+    struct RenderToTexture {
+        XMUINT2 resolution = {0, 0};      // 렌더 해상도
+        uint32_t sample_count = 1;        // MSAA
+        Texture rendertarget_render;      // 렌더 결과
+        Texture rendertarget_display;     // 표시용 (더블 버퍼링)
+        Texture depthstencil;             // 뎁스 버퍼
+    } render_to_texture;
+};
+```
+
+#### 3. 렌더링 함수
+```cpp
+void RenderPath3D::RenderCameraComponents() const {
+    for (each camera with render_to_texture) {
+        UpdateVisibility();           // 컬링
+        DrawScene(PREPASS_DEPTHONLY); // 뎁스 패스
+        ComputeTiledLightCulling();   // 라이트 컬링
+        DrawScene(MAIN, OPAQUE);      // 불투명
+        DrawScene(MAIN, TRANSPARENT); // 투명
+        DrawSky();                    // 스카이
+    }
+}
+```
+
+### VizMotive 비교
+
+| 항목 | Wicked Engine | VizMotive |
+|------|--------------|-----------|
+| `MaterialComponent.cameraSource` | ✅ | ❌ |
+| `CameraComponent.RenderToTexture` | ✅ | ❌ |
+| `RenderCameraComponents()` | ✅ | ❌ (TODO 주석) |
+| 에디터 UI | ✅ | ❌ |
+
+**VizMotive Renderer.cpp:**
+```cpp
+// TODO : RenderToTexture
+// RenderCameraComponents(ctx);  // 주석 처리됨
+```
+
+**결론:** VizMotive 미구현. 이 커밋 참고하여 구현 필요.
 
 ### 변경 파일 (14개)
 
@@ -1195,11 +1352,33 @@ DX12 및 Vulkan 개선 사항.
 **커밋:** `98099891`
 
 ### 설명
-카메라 컴포넌트 렌더링에 멀티스레딩 추가.
+커밋 #47 성능 개선. 여러 카메라 렌더링을 **병렬 처리**.
 
-### 주요 변경사항
-- `wiRenderPath3D.cpp`: 멀티스레드 렌더링 (178줄 수정)
-- `wiScene_Components.h`: 스레드 안전 관련 추가 (1줄)
+### 핵심 변경
+
+```cpp
+// 변경 전: 순차 처리
+for (each camera) {
+    RenderCamera();  // 메인 스레드
+}
+
+// 변경 후: 병렬 처리
+for (each camera) {
+    wi::jobsystem::Execute(ctx, [camera]() {
+        RenderCamera();  // 워커 스레드
+    });
+}
+```
+
+### Visibility 개별 할당
+```cpp
+// 공유 → 개별 (race condition 방지)
+struct RenderToTexture {
+    std::shared_ptr<void> visibility;  // 카메라마다 개별 보유
+};
+```
+
+병렬 실행 시 공유 데이터 사용하면 충돌 발생하므로 개별 할당.
 
 ### 변경 파일 (4개)
 
@@ -1209,14 +1388,50 @@ DX12 및 Vulkan 개선 사항.
 **커밋:** `591104d1`
 
 ### 설명
-카메라 피드 밉매핑, 스텐실 스케일링 체크, NaN 수정 등 여러 개선 사항.
+여러 개선사항 포함.
 
-### 주요 변경사항
-- `wiRenderPath3D.cpp`: 다양한 개선 (193줄)
-- `wiScene.cpp`: 씬 관련 수정 (27줄)
-- `volumetricLight_SpotPS.hlsl`: NaN 수정 (15줄)
-- `meshlet_prepareCS.hlsl`: 메시렛 수정
-- Lua 바인딩 업데이트
+### 1. Camera Feed Mipmapping
+카메라 렌더 텍스처에 밉맵 지원 추가.
+```cpp
+desc.mip_levels = 0;  // 자동 밉맵 체인 생성
+```
+카메라 피드 텍스처에 LOD/블러 효과 적용 가능.
+
+### 2. Stencil Scaling Check (최적화)
+```cpp
+// 변경 전: 무조건 스케일링
+ScaleStencilMask();
+
+// 변경 후: 스텐실 사용 스프라이트 있을 때만
+if (sprite.stencilComp != DISABLED) {
+    ScaleStencilMask();
+}
+```
+
+### 3. NaN Fixup (새 함수)
+```cpp
+void Scene::FixupNans() {
+    for (each transform) {
+        if (isnan(scale/translation/rotation)) {
+            transform.ClearTransform();
+            name += "_nanfix";
+            wilog_warning("NAN detected...");
+        }
+    }
+}
+```
+잘못된 데이터로 인한 크래시 방지.
+
+### VizMotive 비교
+
+| 개선사항 | Wicked | VizMotive | 비고 |
+|---------|--------|-----------|------|
+| Camera Feed Mipmapping | ✅ | ❌ | 카메라 렌더 텍스처 미구현 (#47) |
+| Stencil Scaling Check | ✅ | ❌ | ScaleStencilMask 없음 (#36) |
+| NaN Fixup | ✅ | ❌ | **독립 적용 가능** |
+
+- 1, 2번: 선행 기능 미구현으로 적용 불가
+- 3번 (NaN Fixup): 독립적으로 적용 가능 - 안정성 향상
 
 ### 변경 파일 (12개)
 
@@ -1238,17 +1453,44 @@ Linux 문자열 포맷 컴파일 오류 수정.
 ## 51. added light color mask texture support
 **커밋:** `d1578b01`
 
-### 설명
-라이트 컬러 마스크 텍스처 지원 추가. 라이트에 패턴/쿠키 텍스처 적용 가능.
+**[ ] VizMotive 부분 구현 - 스팟 라이트 누락**
 
-### 주요 변경사항
-- `LightWindow.cpp`: 에디터 UI (11줄)
-- `lightingHF.hlsli`: 라이팅 셰이더 수정 (21줄)
-- `globals.hlsli`: 전역 셰이더 수정 (25줄)
-- `volumetricLight_PointPS.hlsl`: 포인트 라이트 볼류메트릭 (9줄)
-- `volumetricLight_SpotPS.hlsl`: 스팟 라이트 볼류메트릭 (12줄)
-- `wiMath.h`: 수학 헬퍼 추가 (17줄)
-- `wiScene.cpp`: 씬 처리 (15줄)
+### 설명
+라이트에 패턴/쿠키 텍스처 적용 기능.
+
+### 용도
+- **창문 그림자**: 빛이 창문을 통과하는 효과
+- **나뭇잎 그림자**: 나무 사이로 빛이 통과
+- **프로젝터**: 패턴/이미지 투영
+
+### 핵심 구조
+```cpp
+struct LightComponent {
+    int maskTexDescriptor = -1;  // 마스크 텍스처
+};
+```
+
+```hlsl
+// 셰이더에서 마스크 적용
+const uint maskTex = light.GetTextureIndex();
+if (maskTex > 0) {
+    half4 mask = bindless_textures[maskTex].Sample(uv);
+    light_color *= mask.rgb * mask.a;
+}
+```
+
+### VizMotive 비교
+
+| 항목 | Wicked | VizMotive |
+|------|--------|-----------|
+| Point Light 마스크 | ✅ | ✅ |
+| **Spot Light 마스크** | ✅ | ❌ **누락** |
+| Point Volumetric 마스크 | ✅ | ✅ |
+| Spot Volumetric 마스크 | ✅ | ✅ |
+
+**VizMotive `light_spot()` 함수에 maskTex 코드 없음!**
+
+볼류메트릭에는 마스크 있는데 일반 라이팅에는 없어서 불일치 발생.
 
 ### 변경 파일 (12개)
 
@@ -1258,13 +1500,41 @@ Linux 문자열 포맷 컴파일 오류 수정.
 **커밋:** `60d82edb`
 
 ### 설명
-LOD 및 서브셋 관리 버그 수정.
+LOD/Subset 관리 로직 리팩토링 및 캡슐화.
 
-### 주요 변경사항
-- `wiScene_Components.cpp`: 컴포넌트 수정 (86줄)
-- `wiScene_Components.h`: 인터페이스 추가 (9줄)
-- `MeshWindow.cpp`: 에디터 수정 (25줄)
-- `wiScene_BindLua.cpp`: Lua 바인딩 수정 (31줄)
+### 새 함수들
+```cpp
+struct MeshComponent {
+    void DeleteSubset(uint32_t subsetIndex);           // 서브셋 삭제
+    void SetSubsetMaterial(uint32_t subsetIndex, Entity entity);  // 머티리얼 설정
+    Entity GetSubsetMaterial(uint32_t subsetIndex);    // 머티리얼 가져오기
+};
+```
+
+### 변경 이유
+```cpp
+// 변경 전: 직접 접근 (LOD 처리 로직 분산)
+mesh->subsets[subset].materialID = entity;
+
+// 변경 후: 함수로 캡슐화 (LOD 처리 내부화)
+mesh->SetSubsetMaterial(subset, entity);
+```
+
+### VizMotive 비교
+
+**구조가 완전히 다름:**
+
+| 항목 | Wicked | VizMotive |
+|------|--------|-----------|
+| 구조 | `subsets[]` (materialID 포함) | `parts_[]` → `subsets_[]` (materialID 없음) |
+| `CreateSubset()` | ✅ | ❌ (주석 처리) |
+| `DeleteSubset()` | ✅ | ❌ |
+| `SetSubsetMaterial()` | ✅ | ❌ |
+
+- Wicked: 서브셋이 머티리얼 직접 참조
+- VizMotive: Primitive 단위로 분리, 머티리얼 별도 관리
+
+**직접 적용 불가** - 아키텍처 차이로 단순 포팅 어려움.
 
 ### 변경 파일 (5개)
 
@@ -1276,9 +1546,36 @@ LOD 및 서브셋 관리 버그 수정.
 ### 설명
 HDR 윈도우 리사이즈 및 커서 관련 버그 수정.
 
+### 1. HDR 윈도우 리사이즈 픽스 (wiApplication.cpp)
+
+```cpp
+// CreateSwapChain() 후 추가
+rendertargetPreHDR10 = {};  // PreHDR10 텍스처 무효화
+```
+
+**문제:**
+- 스왑체인 재생성 시 (윈도우 리사이즈) `rendertargetPreHDR10`가 이전 크기로 남아있음
+- HDR10 블렌딩 시 해상도 불일치로 아티팩트 발생
+
+**해결:**
+- 스왑체인 재생성 시 PreHDR10 텍스처도 무효화 → 다음 렌더링에서 새 크기로 재생성
+
+### 2. 커서 핸들러 제거 (main_Windows.cpp)
+
+```cpp
+// 변경 전: WM_SETCURSOR 무시
+case WM_SETCURSOR:
+    // cursor is handled by wi::input
+    break;
+
+// 변경 후: case 제거 → DefWindowProc으로 전달
+```
+
+기존에는 "wi::input에서 커서 처리하므로 WM_SETCURSOR 무시하면 깜빡임 방지" 의도였으나, 다른 문제가 발생하여 기본 처리로 변경.
+
 ### 주요 변경사항
-- `wiApplication.cpp`: 수정 (2줄)
-- `main_Windows.cpp`: 불필요한 코드 제거 (3줄)
+- `wiApplication.cpp`: PreHDR10 무효화 추가 (2줄)
+- `main_Windows.cpp`: WM_SETCURSOR 핸들러 제거 (3줄)
 
 ### 변경 파일 (2개)
 
@@ -1288,14 +1585,52 @@ HDR 윈도우 리사이즈 및 커서 관련 버그 수정.
 **커밋:** `4235e2c6`
 
 ### 설명
-WinAPI 커서 상태 관리 개선.
+커밋 #53 후속 수정. `WM_SETCURSOR` 처리를 더 세밀하게 분기.
 
-### 주요 변경사항
-- `main_Windows.cpp`: 커서 상태 관리 (19줄)
-- `wiInput.cpp`: 입력 처리 수정 (5줄)
-- `wiInput.h`: 인터페이스 추가 (3줄)
+### 변경 내용
+
+```cpp
+case WM_SETCURSOR:
+    switch (LOWORD(lParam)) {
+    case HTBOTTOM:
+    case HTBOTTOMLEFT:
+    case HTBOTTOMRIGHT:
+    case HTLEFT:
+    case HTRIGHT:
+    case HTTOP:
+    case HTTOPLEFT:
+    case HTTOPRIGHT:
+        // 윈도우 리사이즈 커서 → 시스템 처리
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    default:
+        // 그 외 → 엔진이 커서 설정하도록 알림
+        wi::input::NotifyCursorChanged();
+        break;
+    }
+    break;
+```
+
+### 동작 분기
+
+| 위치 | Hit Test 코드 | 커서 처리 |
+|------|--------------|----------|
+| 윈도우 테두리 | `HTBOTTOM`, `HTLEFT` 등 | 시스템 기본 (↔, ↕ 리사이즈 커서) |
+| 클라이언트 영역 | 그 외 | 엔진이 제어 (`NotifyCursorChanged`) |
+
+### 새 함수
+```cpp
+// wiInput.h/cpp
+void NotifyCursorChanged();  // OS가 커서 변경했음을 엔진에 알림
+```
+
+### 커밋 #53 → #54 흐름
+1. **#53**: `WM_SETCURSOR` 완전 제거 → DefWindowProc 처리
+2. **#54**: 다시 추가하되 리사이즈 영역 vs 일반 영역 구분
 
 ### 변경 파일 (3개)
+- `main_Windows.cpp`: WM_SETCURSOR 분기 처리 (19줄)
+- `wiInput.cpp`: `NotifyCursorChanged()` 구현 (5줄)
+- `wiInput.h`: 함수 선언 추가 (3줄)
 
 ---
 
@@ -1303,12 +1638,31 @@ WinAPI 커서 상태 관리 개선.
 **커밋:** `9a084b58`
 
 ### 설명
-ImGui Docking 샘플 버그 수정.
+ImGui Docking 샘플의 두 가지 버그 수정.
 
-### 주요 변경사항
-- `Example_ImGui_Docking.cpp`: 샘플 수정 (7줄)
+### 1. 파일명 대소문자 수정
+```cpp
+// 변경 전
+CONTENT_DIR "models/Sponza/sponza.wiscene"
+
+// 변경 후
+CONTENT_DIR "models/Sponza/Sponza.wiscene"
+```
+Linux는 대소문자 구분하므로 파일 로드 실패 문제 해결.
+
+### 2. 카메라 이동 방향 버그 수정
+```cpp
+// 변경 전: D키 → 왼쪽, A키 → 오른쪽 (반대!)
+if (ImGuiKey_D) camera_pos += -movespeed * dir_right;
+if (ImGuiKey_A) camera_pos += +movespeed * dir_right;
+
+// 변경 후: 정상 동작
+if (ImGuiKey_D) camera_pos += +movespeed * dir_right;  // 오른쪽
+if (ImGuiKey_A) camera_pos -= movespeed * dir_right;   // 왼쪽
+```
 
 ### 변경 파일 (1개)
+- `Example_ImGui_Docking.cpp`: 파일명 + 카메라 이동 수정 (7줄)
 
 ---
 
@@ -1329,16 +1683,54 @@ Linux 에디터에서 파일 드래그 앤 드롭 지원 추가.
 **커밋:** `bc128fe6`
 
 ### 설명
-높이 필드(Height Field) 물리 셰이프 타입 추가. 터레인 물리에 유용.
+Height Field 물리 셰이프 타입 추가. 지형(Terrain) 물리에 최적화.
 
-### 주요 변경사항
-- `wiPhysics_Jolt.cpp`: 높이 필드 셰이프 구현 (37줄)
-- `wiTerrain.cpp`: 터레인 통합 (12줄)
-- `wiPrimitive.cpp/h`: 프리미티브 지원 추가 (6줄)
-- `wiScene_Components.h`: 셰이프 타입 추가 (1줄)
-- `RigidBodyWindow.cpp`: 에디터 UI (1줄)
+### Height Field vs Triangle Mesh
+
+| 항목 | Triangle Mesh | Height Field |
+|------|--------------|--------------|
+| 저장 방식 | 모든 삼각형 정점 | 2D 그리드 높이값만 |
+| 메모리 | 많음 | 적음 |
+| 적합 용도 | 복잡한 형상 | **정규 그리드 지형** |
+
+### 핵심 구현 (wiPhysics_Jolt.cpp)
+
+```cpp
+case HEIGHTFIELD:
+    wi::vector<float> heights;
+    for (XMFLOAT3 pos : mesh->vertex_positions) {
+        heights.push_back(pos.y);  // Y값(높이)만 추출
+    }
+
+    uint32_t dim = (uint32_t)std::sqrt(heights.size());  // 정사각형 그리드
+
+    HeightFieldShapeSettings settings(heights.data(), min, scale, dim);
+    shape_result = settings.Create();
+```
+
+### Terrain 기본 셰이프 변경
+```cpp
+// 변경 전
+newrigidbody.shape = RigidBodyPhysicsComponent::TRIANGLE_MESH;
+
+// 변경 후
+newrigidbody.shape = RigidBodyPhysicsComponent::HEIGHTFIELD;
+```
+
+터레인은 정규 그리드 구조이므로 Height Field가 더 효율적.
+
+### 추가된 헬퍼 함수
+```cpp
+// wiPrimitive.h/cpp
+void AABB::AddPoint(const XMFLOAT3& pos);  // 점 추가하며 AABB 확장
+```
 
 ### 변경 파일 (7개)
+- `wiPhysics_Jolt.cpp`: Height Field 셰이프 생성 (37줄)
+- `wiTerrain.cpp`: 터레인 기본 셰이프 변경 (12줄)
+- `wiScene_Components.h`: `HEIGHTFIELD` enum 추가
+- `wiPrimitive.cpp/h`: `AddPoint()` 함수 추가
+- `RigidBodyWindow.cpp`: 에디터 UI 추가
 
 ---
 
@@ -1348,19 +1740,14 @@ Linux 에디터에서 파일 드래그 앤 드롭 지원 추가.
 
 | 순번 | 커밋 | 제목 | 이유 |
 |------|------|------|------|
-| 1 | `4357dc5b` | Vehicle physics (#1053) | Major 신규 기능 - 차량 물리 |
 | 2 | `545e859c` | Capsule shadows (#1055) | Major 렌더링 기능 |
-| 3 | `fdaf5ed7` | Fix Lua stack overflow vulnerability (#1054) | 치명적 보안 버그 수정 |
 | 5 | `808421db` | spherical harmonics (#1056) | Major GI 시스템 개선 |
-| 15 | `bf27a9fb` | Linux hang fix | 치명적 버그 수정 (Linux) |
-| 30 | `dc532889` | xbox gpu hang fix | 치명적 버그 수정 (Xbox) |
-| 34 | `506749de` | Jolt: update to v5.3.0 (#1070) | Major 의존성 업데이트 |
 | 47 | `b1b708d2` | camera render texture can be set to material | Major 신규 기능 |
 
 ### Checkout 방법 (참고)
 ```bash
-# 특정 커밋 checkout (예: Vehicle physics)
-git checkout 4357dc5b
+# 특정 커밋 checkout (예: Capsule shadows)
+git checkout 545e859c
 
 # Remove special character 커밋 적용 (사용자 환경용)
 git cherry-pick <remove-special-character-commit-hash>
