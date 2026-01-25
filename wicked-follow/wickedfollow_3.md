@@ -135,16 +135,62 @@ if ((GetFrame().options & OPTION_BIT_CAPSULE_SHADOW_ENABLED) && !forces().empty(
 ## 3. Fix Lua stack overflow vulnerability (#1054)
 **커밋:** `fdaf5ed7`
 
+**VizMotive 해당 없음 - Lua 미사용**
+
 ### 설명
 Lua 스택 오버플로우 취약점 수정. 보안상 중요한 패치.
 
-### 주요 변경사항
-- `LUA/ldebug.c`: 스택 오버플로우 방지 로직 추가 (5줄)
+### 버그 분석
+
+**문제 발생 과정:**
+```c
+l_noret luaG_runerror(lua_State *L, const char *fmt, ...) {
+    msg = luaO_pushvfstring(L, fmt, argp);  // 스택에 push
+    if (isLua(ci))
+        luaG_addinfo(L, msg, ...);  // 새 메시지 push → 원래 msg 안 지움!
+}
+```
+
+```
+1. luaO_pushvfstring() → "error message" 스택에 push
+   스택: [..., "error message"]
+
+2. luaG_addinfo() → "source:line: error message" 새로 push
+   스택: [..., "error message", "source:line: error message"]
+
+3. 원래 "error message"가 제거되지 않음 → 스택 누수!
+
+에러 반복 시: 스택 +N 누수 → Stack Overflow!
+```
+
+### 수정 내용
+
+```c
+if (isLua(ci)) {
+    luaG_addinfo(L, msg, ci_func(ci)->p->source, currentline(ci));
++   setobjs2s(L, L->top - 2, L->top - 1);  // 새 메시지를 원래 위치로 복사
++   L->top--;                               // 스택 top 감소 (중복 제거)
+}
+```
+
+### 보안 취약점
+
+| 공격 벡터 | 설명 |
+|-----------|------|
+| **DoS 공격** | 의도적으로 Lua 에러 반복 유발 → 스택 오버플로우 → 크래시 |
+| **메모리 corruption** | 스택 경계 넘으면 다른 메모리 영역 침범 가능 |
+
+### VizMotive 비교
+
+| 항목 | Wicked Engine | VizMotive |
+|------|--------------|-----------|
+| Lua 스크립팅 | ✅ 내장 (LUA 폴더) | ❌ 없음 |
+| Lua 바인딩 | ✅ `*_BindLua.cpp` 다수 | ❌ 없음 |
+
+**VizMotive는 Lua를 사용하지 않으므로 이 취약점과 무관.**
 
 ### 변경 파일 (1개)
-```
-WickedEngine/LUA/ldebug.c | 6 +++++-
-```
+- `LUA/ldebug.c`: 스택 정리 로직 추가 (6줄)
 
 ---
 
