@@ -95,6 +95,35 @@ if (scene->IsWetmapProcessingRequired()) {
 - Linux/Vulkan 빌드 지원시 적용 필요
 - DX12 Windows 전용이면 낮은 우선순위
 
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**변경 파일**:
+- `GraphicsDevice_DX12.h`: `wait_queues` 벡터 및 `WaitQueue` 선언 제거
+- `GraphicsDevice_DX12.cpp`:
+  - `SubmitCommandLists`에서 `wait_queues` 처리 루프 제거 (기존 5498-5520)
+  - `WaitQueue()` 함수 구현 제거 (기존 6073-6077)
+- `GBackendDevice.h`: `WaitQueue` 가상 함수 선언 제거
+
+**적용 내용**:
+```cpp
+// 제거됨 - SubmitCommandLists 내
+for (auto& wait : commandlist.wait_queues) {
+    // ... 세마포어 동기화 로직
+}
+commandlist.wait_queues.clear();
+
+// 제거됨 - 함수 구현
+void GraphicsDevice_DX12::WaitQueue(CommandList cmd, QUEUE_TYPE wait_for)
+{
+    CommandList_DX12& commandlist = GetCommandList(cmd);
+    commandlist.wait_queues.push_back(std::make_pair(wait_for, new_semaphore()));
+}
+```
+
+**참고**: `Renderer.cpp`의 `WaitQueue` 호출은 이미 주석 처리되어 있어 추가 수정 불필요
+
 ---
 
 ### #2. `3f5a5cc6` - dx12 and vulkan additional safety updates
@@ -299,6 +328,73 @@ for (int q = 0; q < QUEUE_COUNT; ++q) {
    - CPU 블로킹이므로 메인 스레드에서 호출 시 프레임 드랍 가능
    - VizMotive에서 CopyAllocator 사용 패턴 확인 필요
 
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**변경 파일**: `GraphicsDevice_DX12.cpp`
+
+**1. 펜스 디버그 이름 설정 (SetName)**
+
+| 위치 | 펜스 | 추가된 코드 |
+|------|------|-------------|
+| Line 1727 | CopyAllocator::fence | `dx12_check(cmd.fence->SetName(L"CopyAllocator::fence"))` |
+| Line 2598 | descriptorheap_res.fence | `dx12_check(descriptorheap_res.fence->SetName(L"descriptorheap_res::fence"))` |
+| Line 2636 | descriptorheap_sam.fence | `dx12_check(descriptorheap_sam.fence->SetName(L"descriptorheap_sam::fence"))` |
+| Line 2667-2668 | frame_fence[buffer][queue] | 동적 이름 생성 (`std::wstring`) |
+| Line 2886 | deviceRemovedFence | `dx12_check(deviceRemovedFence->SetName(L"deviceRemovedFence"))` |
+
+```cpp
+// frame_fence 동적 이름 예시
+std::wstring fencename = L"frame_fence[" + std::to_wstring(buffer) + L"][" + std::to_wstring(queue) + L"]";
+dx12_check(frame_fence[buffer][queue]->SetName(fencename.c_str()));
+```
+
+**2. CopyAllocator CPU 대기로 변경 (Line 1767-1772)**
+
+```cpp
+// 변경 전 (GPU Wait)
+hr = device->queues[QUEUE_GRAPHICS].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+hr = device->queues[QUEUE_COMPUTE].queue->Wait(...);
+hr = device->queues[QUEUE_COPY].queue->Wait(...);
+if (device->queues[QUEUE_VIDEO_DECODE].queue) { ... }
+
+// 변경 후 (CPU Wait)
+HANDLE event_handle = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+hr = cmd.fence->SetEventOnCompletion(cmd.fenceValueSignaled, event_handle);
+assert(SUCCEEDED(hr));
+WaitForSingleObject(event_handle, INFINITE);
+CloseHandle(event_handle);
+```
+
+**3. 프레임 끝 큐 간 동기화 추가 (Line 5550-5566)**
+
+```cpp
+// 기존 Signal 루프 뒤에 추가
+// End of frame synchronize queues with each other:
+for (int q = 0; q < QUEUE_COUNT; ++q)
+{
+    CommandQueue& queue = queues[q];
+    if (queue.queue == nullptr)
+        continue;
+    for (int q2 = 0; q2 < QUEUE_COUNT; ++q2)
+    {
+        if (q2 == q)
+            continue;
+        CommandQueue& queue2 = queues[q2];
+        if (queue2.queue == nullptr)
+            continue;
+        hr = queue.queue->Wait(frame_fence[GetBufferIndex()][q2].Get(), 1);
+        assert(SUCCEEDED(hr));
+    }
+}
+```
+
+**효과**:
+- PIX/NSight에서 펜스 식별 가능 (디버깅 향상)
+- 복사 작업 완료 후 즉시 진행 (GPU 큐 stall 방지)
+- 프레임 경계에서 모든 큐 동기화 보장
+
 ---
 
 ### #3. `93ebdaa6` - dx12 separated cpu and gpu fences
@@ -495,6 +591,64 @@ queues[q1].queue->Wait(frame_fence_gpu[...].Get(), FRAMECOUNT);
 frame_fence_cpu[...]->SetEventOnCompletion(1, nullptr);
 frame_fence_cpu[...]->Signal(0);  // CPU용만 리셋
 ```
+
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**변경 파일**:
+- `GraphicsDevice_DX12.h`: 펜스 배열 분리
+- `GraphicsDevice_DX12.cpp`: 펜스 생성/Signal/Wait 로직 수정
+
+**1. 헤더 변경 (Line 108-109)**
+```cpp
+// 변경 전
+Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];
+
+// 변경 후
+Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence_cpu[BUFFERCOUNT][QUEUE_COUNT];
+Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence_gpu[BUFFERCOUNT][QUEUE_COUNT];
+```
+
+**2. 펜스 생성 (Lines 2653-2679)**
+```cpp
+// CPU fence - 초기값 1 (free 상태)
+hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(frame_fence_cpu[buffer][queue]));
+std::wstring fencename_cpu = L"frame_fence_cpu[" + std::to_wstring(buffer) + L"][" + std::to_wstring(queue) + L"]";
+dx12_check(frame_fence_cpu[buffer][queue]->SetName(fencename_cpu.c_str()));
+dx12_check(frame_fence_cpu[buffer][queue]->Signal(1)); // Initialize to free state
+
+// GPU fence - 초기값 0, FRAMECOUNT로 단조 증가
+hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(frame_fence_gpu[buffer][queue]));
+std::wstring fencename_gpu = L"frame_fence_gpu[" + std::to_wstring(buffer) + L"][" + std::to_wstring(queue) + L"]";
+dx12_check(frame_fence_gpu[buffer][queue]->SetName(fencename_gpu.c_str()));
+```
+
+**3. Signal 분리 (Lines 5561-5564)**
+```cpp
+hr = queue.queue->Signal(frame_fence_cpu[GetBufferIndex()][q].Get(), 1);
+hr = queue.queue->Signal(frame_fence_gpu[GetBufferIndex()][q].Get(), FRAMECOUNT);
+```
+
+**4. GPU Wait - frame_fence_gpu 사용 (Line 5580)**
+```cpp
+hr = queue.queue->Wait(frame_fence_gpu[GetBufferIndex()][q2].Get(), FRAMECOUNT);
+```
+
+**5. CPU Wait - frame_fence_cpu 사용 (Lines 5642-5652)**
+```cpp
+ID3D12Fence* fence = frame_fence_cpu[bufferindex][queue].Get();
+if (fence->GetCompletedValue() < 1)
+{
+    dx12_check(fence->SetEventOnCompletion(1, nullptr));
+}
+dx12_check(fence->Signal(0));  // Wait 후 Signal(0)으로 in-use 마킹
+```
+
+**효과**:
+- CPU 펜스 리셋이 GPU-GPU Wait에 영향 주지 않음
+- GPU 펜스는 단조 증가 (FRAMECOUNT) → 경쟁 조건 원천 차단
+- 멀티큐 동기화 안정성 확보
 
 ---
 
@@ -699,6 +853,26 @@ bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
 - device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);
 + device->CreateBufferZeroed(&bd, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);
 ```
+
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**변경 파일 및 내용**:
+
+| 파일 | 라인 | 버퍼 | 변경 |
+|------|------|------|------|
+| `ShaderEngine.cpp` | 138, 140 | `BUFFERTYPE_INDIRECT_DEBUG_0/1` | `CreateBuffer` → `CreateBufferZeroed` |
+| `SortLib.cpp` | 46 | `indirectBuffer` | `CreateBuffer` → `CreateBufferZeroed` |
+| `RenderPath3D_Detail.cpp` | 704, 706 | `BUFFERTYPE_INDIRECT_DEBUG_0/1` | `CreateBuffer` → `CreateBufferZeroed` |
+| `RenderPath3D_Detail.cpp` | 2194 | `res.bins` | `CreateBuffer` → `CreateBufferZeroed` |
+| `GaussianSplatting_Detail.cpp` | 32 | `res.indirectBuffer` | `CreateBuffer` → `CreateBufferZeroed` |
+
+**참고**: `SceneUpdate_Detail.cpp`의 DDGI 버퍼들은 이미 `CreateBufferZeroed` 사용 중 (변경 불필요)
+
+**효과**:
+- `INDIRECT_ARGS` 플래그 버퍼 0 초기화로 GPU hang 방지
+- ExecuteIndirect 호출 시 미초기화 데이터로 인한 undefined behavior 차단
 
 ---
 
@@ -1094,6 +1268,22 @@ return result;
 SWAPCHAIN 상태 추가 시:
 - 배리어 `before` 상태가 정확해짐
 - 디버깅/검증 레이어에서 경고 감소 가능
+
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**변경 파일 및 내용**:
+
+| 파일 | 라인 | 변경 |
+|------|------|------|
+| `GBackend.h` | 485 | `SWAPCHAIN = 1 << 17` 추가 |
+| `GraphicsDevice_DX12.cpp` | 121-122 | `SWAPCHAIN → D3D12_RESOURCE_STATE_PRESENT` 매핑 |
+| `GraphicsDevice_DX12.cpp` | 5960 | `GetBackBuffer`에서 `desc.layout = ResourceState::SWAPCHAIN` 설정 |
+
+**효과**:
+- 스왑체인 백버퍼 상태 명시적 관리
+- 배리어 전환 시 정확한 시작 상태 보장
 
 ---
 
