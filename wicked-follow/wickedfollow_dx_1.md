@@ -1,0 +1,1725 @@
+# Wicked Engine DX12 변경사항 분석 (2025년 3월~8월)
+
+## 개요
+- **분석 기간**: 2025년 3월 1일 ~ 2025년 9월 1일
+- **대상 커밋**: DX12 관련 파일 수정 또는 공통 그래픽스 인터페이스 변경
+- **목적**: VizMotive Engine 적용 검토
+- **분석 대상**: 19개 (비디오 관련 6개 제외)
+
+---
+
+## 커밋 목록 (시간순)
+
+### 비디오 제외 - 분석 대상 (19개)
+
+| # | 날짜 | 커밋 | 제목 | 카테고리 |
+|---|------|------|------|----------|
+| 1 | 2025-03-12 | `bf27a9fb` | Linux hang fix | 안정성 |
+| 2 | 2025-03-15 | `3f5a5cc6` | dx12 and vulkan additional safety updates | 안정성 |
+| 3 | 2025-03-16 | `93ebdaa6` | dx12 separated cpu and gpu fences | 안정성 |
+| 4 | 2025-03-16 | `dc532889` | xbox gpu hang fix | 안정성 |
+| 5 | 2025-03-19 | `652fe0da` | added crossfade fade type | 기능 |
+| 6 | 2025-03-21 | `4f503da8` | HDR improvements | 기능 |
+| 7 | 2025-03-25 | `99c82676` | dx12 and vulkan improvements | 개선 |
+| 8 | 2025-03-26 | `b1b708d2` | camera render texture can be set to material | 기능 |
+| 9 | 2025-04-25 | `fe3b922f` | Terrain spline material and some gui updates | 버그수정 |
+| 10 | 2025-04-28 | `30917c9e` | GPU buffer suballocator | 성능 |
+| 11 | 2025-04-28 | `8582ea3d` | Terrain determinism fixes | 버그수정 |
+| 12 | 2025-05-18 | `a948117e` | textured rectangle lights, video frame pacing | 기능 |
+| 13 | 2025-05-20 | `e6a003cd` | stringconvert replacement | 리팩토링 |
+| 14 | 2025-05-24 | `96f267e1` | improved shadow bias | 렌더링 |
+| 15 | 2025-06-03 | `a44d321b` | removal of libraries (basis universal, qoi) | 리팩토링 |
+| 16 | 2025-06-14 | `df69a706` | dx12: root signature desc life extender | 안정성 |
+| 17 | 2025-06-28 | `6c973af6` | block compressed texture saving fix | 버그수정 |
+| 18 | 2025-07-13 | `6cc52406` | prevent clang warning | 빌드 |
+| 19 | 2025-08-15 | `e9d5cd09` | texture swizzle improvement | 기능 |
+
+### 비디오 관련 - 분석 제외 (6개)
+
+| 날짜 | 커밋 | 제목 |
+|------|------|------|
+| 2025-05-03 | `cdb5f8f2` | Video decode fixes for AMD GPU |
+| 2025-05-04 | `0dbb81b1` | dx12 video decoder fix |
+| 2025-05-04 | `0bfd9485` | DX12 video decoder fix for Nvidia GPU |
+| 2025-05-05 | `a5830044` | video: Nvidia buffer workaround, h265 api |
+| 2025-05-09 | `aeb71baa` | video small updates |
+| 2025-07-11 | `e9f8647f` | re-added custom dxva.h |
+
+---
+
+## 상세 분석 (시간순)
+
+---
+
+### #1. `bf27a9fb` - Linux hang fix
+**날짜**: 2025-03-12 | **카테고리**: 안정성 | **우선순위**: 중간
+
+**문제**: `WaitQueue()`가 Linux에서 행(hang) 유발
+- 큐가 자기 자신을 기다리거나 세마포어 동기화 문제
+
+**해결**: `WaitQueue()` API 완전 제거
+```cpp
+// 제거됨 - GraphicsDevice.h
+virtual void WaitQueue(CommandList cmd, QUEUE_TYPE wait_for) = 0;
+
+// 제거됨 - CommandList_DX12
+wi::vector<std::pair<QUEUE_TYPE, Semaphore>> wait_queues;
+```
+
+**렌더링 로직 변경** (`wiRenderPath3D.cpp`):
+```cpp
+// 변경 전 - 별도 컴퓨트 커맨드리스트로 wetmap 처리
+device->WaitQueue(cmd, QUEUE_COMPUTE);  // 프레임 시작시 이전 프레임 대기
+// ... 나중에 ...
+CommandList wetmap_cmd = device->BeginCommandList(QUEUE_COMPUTE);
+device->WaitCommandList(wetmap_cmd, cmd);
+wi::renderer::RefreshWetmaps(visibility_main, wetmap_cmd);
+
+// 변경 후 - 같은 커맨드리스트에서 처리
+// WaitQueue 제거
+if (scene->IsWetmapProcessingRequired()) {
+    wi::renderer::RefreshWetmaps(visibility_main, cmd);  // 동일 cmd 사용
+}
+```
+
+**VizMotive 문제점**:
+- `WaitQueue()` 함수 여전히 존재 (`GraphicsDevice_DX12.cpp:6073`)
+- `wait_queues` 벡터 사용 (`GraphicsDevice_DX12.h:156`)
+- **사용 위치** (`Renderer.cpp:1457`):
+  ```cpp
+  device->WaitQueue(cmd, QUEUE_COMPUTE);  // Wicked에서 제거된 코드와 동일
+  ```
+- **Linux 빌드시 행(hang) 발생 가능**
+
+**적용 권장**: 중간
+- Linux/Vulkan 빌드 지원시 적용 필요
+- DX12 Windows 전용이면 낮은 우선순위
+
+---
+
+### #2. `3f5a5cc6` - dx12 and vulkan additional safety updates
+**날짜**: 2025-03-15 | **카테고리**: 안정성 | **우선순위**: 높음
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | `wiGraphicsDevice_DX12.cpp` (+64줄), `wiGraphicsDevice_DX12.h` (+1줄) |
+| 핵심 변경 | 펜스 명명, CopyAllocator CPU 대기, 프레임 끝 큐 동기화 |
+
+#### 변경 1: 모든 펜스에 디버그 이름 설정
+
+**목적**: GPU 디버깅 시 펜스 식별 용이 (PIX, NSight 등에서 표시)
+
+```cpp
+// frame_fence 명명 (큐 타입별)
+switch (queue) {
+case QUEUE_GRAPHICS:
+    dx12_check(frame_fence[buffer][queue]->SetName(L"frame_fence[QUEUE_GRAPHICS]"));
+    break;
+case QUEUE_COMPUTE:
+    dx12_check(frame_fence[buffer][queue]->SetName(L"frame_fence[QUEUE_COMPUTE]"));
+    break;
+case QUEUE_COPY:
+    dx12_check(frame_fence[buffer][queue]->SetName(L"frame_fence[QUEUE_COPY]"));
+    break;
+case QUEUE_VIDEO_DECODE:
+    dx12_check(frame_fence[buffer][queue]->SetName(L"frame_fence[QUEUE_VIDEO_DECODE]"));
+    break;
+}
+
+// 기타 펜스 명명
+dx12_check(descriptorheap_res.fence->SetName(L"DescriptorHeapGPU[CBV_SRV_UAV]::fence"));
+dx12_check(descriptorheap_sam.fence->SetName(L"DescriptorHeapGPU[SAMPLER]::fence"));
+dx12_check(cmd.fence->SetName(L"CopyAllocator::fence"));
+dx12_check(deviceRemovedFence->SetName(L"deviceRemovedFence"));
+dx12_check(dependency.fence.Get()->SetName(L"DependencySemaphore"));
+```
+
+#### 변경 2: CopyAllocator CPU 대기로 변경
+
+**변경 전 (GPU 대기)**:
+```cpp
+void CopyAllocator::submit(CopyCMD cmd) {
+    queue->ExecuteCommandLists(1, commandlists);
+    queue->Signal(cmd.fence.Get(), cmd.fenceValueSignaled);
+
+    // 모든 GPU 큐가 복사 완료를 대기
+    device->queues[QUEUE_GRAPHICS].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    device->queues[QUEUE_COMPUTE].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    device->queues[QUEUE_COPY].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    // ...
+}
+```
+
+**변경 후 (CPU 대기)**:
+```cpp
+void CopyAllocator::submit(CopyCMD cmd) {
+    queue->ExecuteCommandLists(1, commandlists);
+    queue->Signal(cmd.fence.Get(), cmd.fenceValueSignaled);
+
+#if 1  // CPU 대기 방식 활성화
+    // CPU에서 복사 완료까지 즉시 대기 (nullptr = 즉시 블로킹)
+    dx12_check(cmd.fence->SetEventOnCompletion(cmd.fenceValueSignaled, nullptr));
+#else  // 기존 GPU 대기 방식 (비활성화)
+    device->queues[QUEUE_GRAPHICS].queue->Wait(...);
+    // ...
+#endif
+}
+```
+
+**이유**:
+- GPU 큐 간 의존성보다 CPU 블로킹이 더 단순하고 안전
+- 복사 작업은 대부분 초기화/로딩 시점에 발생 → CPU 대기해도 성능 영향 적음
+
+#### 변경 3: 프레임 끝 큐 상호 동기화
+
+**추가된 코드 (SubmitCommandLists 내)**:
+```cpp
+// Sync up every queue to every other queue at the end of the frame:
+//   Note: it disables overlapping queues into the next frame
+for (int queue1 = 0; queue1 < QUEUE_COUNT; ++queue1)
+{
+    if (queues[queue1].queue == nullptr)
+        continue;
+    for (int queue2 = 0; queue2 < QUEUE_COUNT; ++queue2)
+    {
+        if (queue1 == queue2)
+            continue;
+        if (queues[queue2].queue == nullptr)
+            continue;
+        ID3D12Fence* fence = frame_fence[GetBufferIndex()][queue2].Get();
+        queues[queue1].queue->Wait(fence, 1);
+    }
+}
+```
+
+**동작**: 프레임 N 종료 시, 모든 큐가 서로의 작업 완료를 대기
+```
+GRAPHICS --Wait--> COMPUTE의 fence
+GRAPHICS --Wait--> COPY의 fence
+COMPUTE  --Wait--> GRAPHICS의 fence
+COMPUTE  --Wait--> COPY의 fence
+COPY     --Wait--> GRAPHICS의 fence
+COPY     --Wait--> COMPUTE의 fence
+```
+
+**목적**:
+- 큐 간 암묵적 의존성으로 인한 경쟁 조건 방지
+- 다음 프레임으로의 작업 오버랩 비활성화 → 안정성 우선
+
+#### 변경 4: 코드 정리
+
+```cpp
+// NULL → nullptr 통일
+frame_fence[bufferindex][queue]->SetEventOnCompletion(1, nullptr);  // 기존: NULL
+
+// 지역 변수 활용으로 가독성 향상
+ID3D12Fence* fence = frame_fence[bufferindex][queue].Get();
+if (fence->GetCompletedValue() < 1) {
+    dx12_check(fence->SetEventOnCompletion(1, nullptr));
+}
+dx12_check(fence->Signal(0));
+```
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked (3f5a5cc6 이후) | VizMotive (현재) | 상태 |
+|------|------------------------|------------------|------|
+| 펜스 명명 | ✅ 모든 펜스에 SetName | ❌ 없음 | **미적용** |
+| CopyAllocator 대기 | CPU 대기 (SetEventOnCompletion) | GPU 대기 (queue->Wait) | **미적용** |
+| 프레임 끝 큐 동기화 | ✅ 모든 큐 상호 Wait | ❌ 없음 | **미적용** |
+| NULL→nullptr | ✅ nullptr 사용 | ❌ NULL 사용 | **미적용** |
+
+#### VizMotive 코드 현황
+
+**1. 펜스 명명 - 없음**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:2655
+hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(frame_fence[buffer][queue]));
+assert(SUCCEEDED(hr));
+// SetName 호출 없음
+
+// VizMotive: GraphicsDevice_DX12.cpp:2595
+hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(descriptorheap_res.fence));
+// SetName 호출 없음
+```
+
+**2. CopyAllocator - GPU 대기 방식 유지**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:1762-1776
+void GraphicsDevice_DX12::CopyAllocator::submit(CopyCMD cmd)
+{
+    queue->ExecuteCommandLists(1, commandlists);
+    hr = queue->Signal(cmd.fence.Get(), cmd.fenceValueSignaled);
+
+    // GPU 대기 방식 (Wicked 변경 전과 동일)
+    hr = device->queues[QUEUE_GRAPHICS].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    hr = device->queues[QUEUE_COMPUTE].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    hr = device->queues[QUEUE_COPY].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    if (device->queues[QUEUE_VIDEO_DECODE].queue) {
+        hr = device->queues[QUEUE_VIDEO_DECODE].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    }
+}
+```
+
+**3. 프레임 끝 큐 동기화 - 없음**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:5560-5571
+// 큐 Signal만 있고, 상호 Wait 로직 없음
+for (int q = 0; q < QUEUE_COUNT; ++q) {
+    CommandQueue& queue = queues[q];
+    if (queue.queue == nullptr)
+        continue;
+    queue.submit();
+    hr = queue.queue->Signal(frame_fence[GetBufferIndex()][q].Get(), 1);
+}
+// 여기에 Wicked의 큐 상호 대기 로직이 없음
+```
+
+#### 적용 권장사항
+
+| 우선순위 | 항목 | 이유 |
+|----------|------|------|
+| **높음** | 프레임 끝 큐 동기화 | 멀티큐 사용 시 경쟁 조건 방지 |
+| **중간** | 펜스 명명 | 디버깅 편의성 (PIX에서 식별 가능) |
+| **낮음** | CopyAllocator CPU 대기 | 현재 GPU 대기도 동작하나, 단순성 측면에서 권장 |
+| **낮음** | NULL→nullptr | 코드 스타일 통일 |
+
+#### 적용 시 주의사항
+
+1. **프레임 끝 큐 동기화**
+   - 성능 영향: 큐 오버랩 비활성화 → 약간의 GPU 활용률 감소 가능
+   - 안정성 우선 선택으로, 프로파일링 후 필요시 조정
+
+2. **CopyAllocator 변경**
+   - CPU 블로킹이므로 메인 스레드에서 호출 시 프레임 드랍 가능
+   - VizMotive에서 CopyAllocator 사용 패턴 확인 필요
+
+---
+
+### #3. `93ebdaa6` - dx12 separated cpu and gpu fences
+**날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | `wiGraphicsDevice_DX12.cpp` (+35줄, -11줄), `wiGraphicsDevice_DX12.h` (+2줄, -1줄) |
+| 핵심 변경 | 단일 펜스 → CPU/GPU 전용 펜스 분리 |
+
+#### 문제 상황
+
+단일 `frame_fence`를 CPU 대기와 GPU 큐 간 동기화에 공용으로 사용 시 경쟁 조건 발생:
+
+```
+Frame N:
+  GPU Signal(fence, 1)     ← 프레임 완료 신호
+  CPU SetEventOnCompletion(1) ← CPU가 완료 대기
+  CPU Signal(fence, 0)     ← 다음 프레임용 리셋 ⚠️
+
+Frame N+1:
+  GPU Queue1.Wait(fence, 1) ← GPU가 fence=1 대기하는데, 이미 0으로 리셋됨!
+```
+
+**경쟁 조건**: CPU가 펜스를 0으로 리셋하는 시점과 GPU가 Wait하는 시점이 겹치면 GPU가 영원히 대기하거나 잘못된 타이밍에 진행.
+
+#### 해결: 펜스 분리
+
+**변경 전 (단일 펜스)**:
+```cpp
+// wiGraphicsDevice_DX12.h
+ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];  // 하나의 펜스
+
+// 사용 패턴
+queue->Signal(frame_fence[buffer][q].Get(), 1);           // GPU 신호
+queue->Wait(frame_fence[buffer][q].Get(), 1);             // GPU 대기
+fence->SetEventOnCompletion(1, nullptr);                   // CPU 대기
+fence->Signal(0);                                          // 리셋 ⚠️ 경쟁조건
+```
+
+**변경 후 (CPU/GPU 분리)**:
+```cpp
+// wiGraphicsDevice_DX12.h
+ComPtr<ID3D12Fence> frame_fence_cpu[BUFFERCOUNT][QUEUE_COUNT];  // CPU 전용
+ComPtr<ID3D12Fence> frame_fence_gpu[BUFFERCOUNT][QUEUE_COUNT];  // GPU 전용
+```
+
+#### Signal 값 전략
+
+| 펜스 | Signal 값 | 대기 값 | 리셋 |
+|------|-----------|---------|------|
+| `frame_fence_cpu` | `1` (고정) | `1` | `Signal(0)` 으로 리셋 |
+| `frame_fence_gpu` | `FRAMECOUNT` (증가) | `FRAMECOUNT` | 리셋 안함 (단조 증가) |
+
+```cpp
+// SubmitCommandLists 내
+queue.queue->Signal(frame_fence_cpu[GetBufferIndex()][q].Get(), 1);         // CPU용
+queue.queue->Signal(frame_fence_gpu[GetBufferIndex()][q].Get(), FRAMECOUNT); // GPU용
+
+// GPU 큐 간 동기화 (commit #2에서 추가된 부분)
+ID3D12Fence* fence = frame_fence_gpu[GetBufferIndex()][queue2].Get();
+queues[queue1].queue->Wait(fence, FRAMECOUNT);  // GPU용 펜스 사용
+
+// CPU 프레임 대기
+ID3D12Fence* fence = frame_fence_cpu[bufferindex][queue].Get();
+if (fence->GetCompletedValue() < 1) {
+    fence->SetEventOnCompletion(1, nullptr);  // CPU 대기
+}
+fence->Signal(0);  // CPU용 펜스만 리셋
+```
+
+#### 경쟁 조건 해결 원리
+
+```
+Frame N (FRAMECOUNT=100):
+  GPU Signal(fence_cpu, 1)
+  GPU Signal(fence_gpu, 100)
+  CPU Wait(fence_cpu, 1) → 완료
+  CPU Reset(fence_cpu, 0)      ← CPU용만 리셋
+
+Frame N+1 (FRAMECOUNT=101):
+  GPU Queue1.Wait(fence_gpu, 100) ← fence_gpu는 리셋 안됨, 100 유지
+  → 즉시 통과 (이미 100 이상)
+
+  GPU Signal(fence_cpu, 1)
+  GPU Signal(fence_gpu, 101)    ← 단조 증가
+```
+
+**핵심**: `frame_fence_gpu`는 리셋하지 않고 `FRAMECOUNT`로 단조 증가 → 경쟁 조건 원천 차단
+
+#### 펜스 명명
+
+```cpp
+// CPU 펜스
+dx12_check(frame_fence_cpu[buffer][queue]->SetName(L"frame_fence_cpu[QUEUE_GRAPHICS]"));
+dx12_check(frame_fence_cpu[buffer][queue]->SetName(L"frame_fence_cpu[QUEUE_COMPUTE]"));
+// ...
+
+// GPU 펜스
+dx12_check(frame_fence_gpu[buffer][queue]->SetName(L"frame_fence_gpu[QUEUE_GRAPHICS]"));
+dx12_check(frame_fence_gpu[buffer][queue]->SetName(L"frame_fence_gpu[QUEUE_COMPUTE]"));
+// ...
+```
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked (93ebdaa6 이후) | VizMotive (현재) | 상태 |
+|------|------------------------|------------------|------|
+| 펜스 구조 | `frame_fence_cpu` + `frame_fence_gpu` | 단일 `frame_fence` | **미적용** |
+| CPU Signal 값 | `1` (고정) | `1` (고정) | 동일 |
+| GPU Signal 값 | `FRAMECOUNT` (단조 증가) | 해당없음 | **미적용** |
+| GPU-GPU Wait | `frame_fence_gpu` 사용 | 없음 (commit #2 참조) | **미적용** |
+| 리셋 전략 | CPU용만 리셋 | 단일 펜스 리셋 | **차이** |
+
+#### VizMotive 코드 현황
+
+**1. 단일 펜스 선언**
+```cpp
+// VizMotive: GraphicsDevice_DX12.h:108
+Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];
+// CPU/GPU 분리 없음
+```
+
+**2. Signal - 고정 값 1**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:5569
+hr = queue.queue->Signal(frame_fence[GetBufferIndex()][q].Get(), 1);
+// FRAMECOUNT 사용 안함
+```
+
+**3. CPU 대기 및 리셋**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:5629-5636
+if (FRAMECOUNT >= BUFFERCOUNT && frame_fence[bufferindex][queue]->GetCompletedValue() < 1)
+{
+    hr = frame_fence[bufferindex][queue]->SetEventOnCompletion(1, NULL);
+}
+hr = frame_fence[bufferindex][queue]->Signal(0);  // 리셋
+```
+
+**4. GPU-GPU Wait - 없음**
+```cpp
+// VizMotive에는 commit #2의 큐 상호 동기화 로직이 없음
+// 따라서 frame_fence_gpu가 필요한 시나리오 자체가 없음
+```
+
+#### 적용 고려사항
+
+| 상황 | 권장 |
+|------|------|
+| commit #2 큐 동기화 미적용 | 현재 단일 펜스로도 동작 (GPU-GPU Wait 없음) |
+| commit #2 적용 예정 | **반드시 commit #3도 함께 적용** |
+| 안정성 최우선 | 펜스 분리 적용 권장 |
+
+#### 적용 순서 (중요)
+
+```
+1. commit #2 (3f5a5cc6) - 큐 동기화 추가
+   └── 이 시점에서 단일 펜스 사용 시 경쟁 조건 발생 가능
+
+2. commit #3 (93ebdaa6) - 펜스 분리
+   └── 경쟁 조건 해결
+```
+
+**주의**: commit #2만 적용하고 commit #3을 적용하지 않으면 경쟁 조건 위험 증가.
+둘 다 적용하거나, 둘 다 적용하지 않는 것이 안전.
+
+#### 적용 시 변경 필요 사항
+
+```cpp
+// 1. 헤더 변경
+// GraphicsDevice_DX12.h
+- ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];
++ ComPtr<ID3D12Fence> frame_fence_cpu[BUFFERCOUNT][QUEUE_COUNT];
++ ComPtr<ID3D12Fence> frame_fence_gpu[BUFFERCOUNT][QUEUE_COUNT];
+
+// 2. 펜스 생성 (기존 + 새 GPU 펜스)
+device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(frame_fence_cpu[buffer][queue]));
+device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(frame_fence_gpu[buffer][queue]));
+
+// 3. Signal 분리
+queue->Signal(frame_fence_cpu[...].Get(), 1);
+queue->Signal(frame_fence_gpu[...].Get(), FRAMECOUNT);
+
+// 4. GPU Wait는 frame_fence_gpu 사용
+queues[q1].queue->Wait(frame_fence_gpu[...].Get(), FRAMECOUNT);
+
+// 5. CPU Wait는 frame_fence_cpu 사용 (기존과 동일)
+frame_fence_cpu[...]->SetEventOnCompletion(1, nullptr);
+frame_fence_cpu[...]->Signal(0);  // CPU용만 리셋
+```
+
+---
+
+### #4. `dc532889` - xbox gpu hang fix
+**날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | `wiGraphicsDevice.h` (+10줄), 5개 사용처 수정 (-26줄) |
+| 핵심 변경 | Indirect 버퍼 생성 시 0 초기화 강제 |
+
+#### 문제 상황
+
+Xbox에서 초기화되지 않은 indirect 버퍼로 인한 GPU hang 발생:
+
+```cpp
+// 문제 코드
+GPUBufferDesc bd;
+bd.misc_flags = ResourceMiscFlag::INDIRECT_ARGS;
+device->CreateBuffer(&bd, nullptr, &indirectBuffer);  // ⚠️ 미초기화
+
+// GPU에서 ExecuteIndirect 호출 시
+// - 미초기화 데이터 = 랜덤 값
+// - 잘못된 DrawCount/DispatchCount → GPU hang 또는 undefined behavior
+```
+
+**원인**: `ExecuteIndirect`는 버퍼의 값을 GPU에서 직접 읽어 draw/dispatch 수행. 미초기화 시:
+- `InstanceCount = 쓰레기값` → 수백만 인스턴스 그리려고 시도
+- `ThreadGroupCountX = 쓰레기값` → 엄청난 compute dispatch
+
+#### 해결: 헬퍼 함수 추가
+
+```cpp
+// wiGraphicsDevice.h에 추가
+bool CreateBufferCleared(const GPUBufferDesc* desc, uint8_t value, GPUBuffer* buffer) const
+{
+    return CreateBuffer2(desc, [&](void* dest) {
+        std::memset(dest, value, desc->size);
+    }, buffer);
+}
+
+bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer) const
+{
+    return CreateBufferCleared(desc, 0, buffer);
+}
+```
+
+#### 변경된 사용처
+
+| 파일 | 버퍼 | 변경 |
+|------|------|------|
+| `wiEmittedParticle.cpp` | `indirectBuffers` | `CreateBuffer(nullptr)` → `CreateBufferZeroed()` |
+| `wiRenderer.cpp` | `BUFFERTYPE_INDIRECT_DEBUG_0/1` | `CreateBuffer(nullptr)` → `CreateBufferZeroed()` |
+| `wiRenderer.cpp` | `indirectDebugStatsReadback` | 수동 초기화 제거 → `CreateBufferZeroed()` |
+| `wiHairParticle.cpp` | `generalBuffer` | `CreateBuffer(nullptr)` → `CreateBufferZeroed()` |
+| `wiOcean.cpp` | `buffer_Float2_Ht`, `buffer_Float_Dxyz` | 수동 `zero_data` 제거 → `CreateBufferZeroed()` |
+| `wiScene.cpp` | SurfelGI 버퍼들 | `CreateBuffer(nullptr)` → `CreateBufferZeroed()` |
+| `wiScene.cpp` | DDGI 버퍼들 | 수동 `zerodata` 제거 → `CreateBufferZeroed()` |
+| `wiScene.cpp` | `impostorBuffer` | `CreateBuffer(nullptr)` → `CreateBufferZeroed()` |
+
+#### 변경 전후 비교
+
+**변경 전 (수동 초기화)**:
+```cpp
+// 방법 1: 별도 벡터 생성
+wi::vector<uint8_t> zerodata(buf.size);
+device->CreateBuffer(&buf, zerodata.data(), &ddgi.ray_buffer);
+
+// 방법 2: 명시적 초기 데이터
+uint indirect_data[] = { 0,0,0, 0,0,0, 0,0,0 };
+device->CreateBuffer(&buf, &indirect_data, &surfelgi.indirectBuffer);
+
+// 방법 3: nullptr 후 ClearUAV (비효율)
+device->CreateBuffer(&bd, nullptr, &generalBuffer);
+// ... 나중에 ...
+device->ClearUAV(&generalBuffer, 0, cmd);  // GPU 커맨드 필요
+```
+
+**변경 후 (헬퍼 함수)**:
+```cpp
+device->CreateBufferZeroed(&buf, &ddgi.ray_buffer);
+device->CreateBufferZeroed(&buf, &surfelgi.indirectBuffer);
+device->CreateBufferZeroed(&bd, &generalBuffer);
+```
+
+#### 부가 효과: InitializeGPUDataIfNeeded 제거
+
+```cpp
+// wiHairParticle.cpp - 제거된 함수
+void HairParticleSystem::InitializeGPUDataIfNeeded(CommandList cmd)
+{
+    if (gpu_initialized)
+        return;
+    device->ClearUAV(&generalBuffer, 0, cmd);  // GPU 커맨드로 초기화
+    device->Barrier(...);
+    gpu_initialized = true;
+}
+
+// wiRenderer.cpp - 호출부 제거
+// 기존: 매 프레임 hair 초기화 체크
+for (size_t i = 0; i < vis.scene->hairs.GetCount(); ++i)
+{
+    vis.scene->hairs[i].InitializeGPUDataIfNeeded(cmd);  // 제거됨
+}
+```
+
+**이점**:
+- GPU 커맨드 없이 CPU에서 버퍼 생성 시점에 초기화
+- 런타임 체크(`gpu_initialized`) 제거 → 성능 향상
+- 코드 단순화
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked (dc532889 이후) | VizMotive (현재) | 상태 |
+|------|------------------------|------------------|------|
+| `CreateBufferZeroed` 함수 | ✅ 있음 | ✅ 있음 | **동일** |
+| `CreateBufferCleared` 함수 | ✅ 있음 | ✅ 있음 | **동일** |
+| Indirect 버퍼 초기화 | 모두 `CreateBufferZeroed` 사용 | **일부만 사용** | **부분 적용** |
+
+#### VizMotive 코드 현황
+
+**1. 헬퍼 함수 - 이미 있음**
+```cpp
+// VizMotive: GBackendDevice.h:262-270
+bool CreateBufferCleared(const GPUBufferDesc* desc, uint8_t value, GPUBuffer* buffer,
+                         const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const
+{
+    return CreateBuffer2(desc, [&](void* dest) { std::memset(dest, value, desc->size); }, buffer, alias, alias_offset);
+}
+
+bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer,
+                        const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const
+{
+    return CreateBufferCleared(desc, 0, buffer, alias, alias_offset);
+}
+```
+
+**2. CreateBufferZeroed 사용 중인 곳 (DDGI)**
+```cpp
+// VizMotive: SceneUpdate_Detail.cpp:1263-1290 ✅
+device->CreateBufferZeroed(&buf, &ddgi.rayBuffer);
+device->CreateBufferZeroed(&buf, &ddgi.varianceBuffer);
+device->CreateBufferZeroed(&buf, &ddgi.raycountBuffer);
+device->CreateBufferZeroed(&buf, &ddgi.rayallocationBuffer);  // INDIRECT_ARGS 포함
+device->CreateBufferZeroed(&buf, &ddgi.probeBuffer);
+```
+
+**3. CreateBuffer(nullptr) 사용 중인 곳 (미초기화) ⚠️**
+```cpp
+// VizMotive: ShaderEngine.cpp:138-141 ⚠️
+bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
+device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_0]);  // 미초기화
+device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);  // 미초기화
+
+// VizMotive: SortLib.cpp:44-46 ⚠️
+bd.misc_flags = ResourceMiscFlag::INDIRECT_ARGS | ResourceMiscFlag::BUFFER_RAW;
+graphics::GetDevice()->CreateBuffer(&bd, nullptr, &indirectBuffer);  // 미초기화
+
+// VizMotive: RenderPath3D_Detail.cpp:703-707 ⚠️
+bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
+device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_0]);  // 미초기화
+device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);  // 미초기화
+
+// VizMotive: RenderPath3D_Detail.cpp:2176-2177 ⚠️
+desc.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED | ResourceMiscFlag::INDIRECT_ARGS;
+bool success = device->CreateBuffer(&desc, nullptr, &res.bins);  // 미초기화
+
+// VizMotive: GaussianSplatting_Detail.cpp:30-32 ⚠️
+bd.misc_flags = ResourceMiscFlag::INDIRECT_ARGS | ResourceMiscFlag::BUFFER_RAW;
+device->CreateBuffer(&bd, nullptr, &res.indirectBuffer);  // 미초기화
+```
+
+#### VizMotive 수정 필요 목록
+
+| 파일 | 라인 | 버퍼 | 수정 |
+|------|------|------|------|
+| `ShaderEngine.cpp` | 138-141 | `BUFFERTYPE_INDIRECT_DEBUG_0/1` | `CreateBufferZeroed` 사용 |
+| `SortLib.cpp` | 46 | `indirectBuffer` | `CreateBufferZeroed` 사용 |
+| `RenderPath3D_Detail.cpp` | 704-707 | `BUFFERTYPE_INDIRECT_DEBUG_0/1` | `CreateBufferZeroed` 사용 |
+| `RenderPath3D_Detail.cpp` | 2177 | `res.bins` | `CreateBufferZeroed` 사용 |
+| `GaussianSplatting_Detail.cpp` | 32 | `res.indirectBuffer` | `CreateBufferZeroed` 사용 |
+
+#### 적용 권장사항
+
+| 우선순위 | 항목 | 이유 |
+|----------|------|------|
+| **높음** | 위 5개 파일의 indirect 버퍼 수정 | GPU hang 방지 (Xbox 및 일부 드라이버) |
+| **중간** | 기타 `INDIRECT_ARGS` 플래그 사용 버퍼 점검 | 잠재적 문제 예방 |
+
+#### 수정 예시
+
+```cpp
+// ShaderEngine.cpp:138-141
+bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
+- device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_0]);
++ device->CreateBufferZeroed(&bd, &buffers[BUFFERTYPE_INDIRECT_DEBUG_0]);
+- device->CreateBuffer(&bd, nullptr, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);
++ device->CreateBufferZeroed(&bd, &buffers[BUFFERTYPE_INDIRECT_DEBUG_1]);
+```
+
+---
+
+### #5. `652fe0da` - added crossfade fade type
+**날짜**: 2025-03-19 | **카테고리**: 기능 | **우선순위**: 낮음
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | 14개 (+261줄, -106줄) |
+| 핵심 변경 | 씬 전환 시 CrossFade 효과 추가, RenderPassBegin 헬퍼 |
+
+#### CrossFade란?
+
+**기존 FadeToColor**: 화면 → 검정(또는 색상) → 새 화면
+```
+Scene A → [Fade to Black] → Scene B
+           ↑ 완전히 검정색이 되는 순간 씬 전환
+```
+
+**새로운 CrossFade**: 이전 화면 → 새 화면으로 직접 블렌딩
+```
+Scene A ──────┐
+              ├──→ [Blend] → Scene B
+Scene B ──────┘
+```
+
+#### 구현 원리
+
+1. **CrossFade 시작 시**: 현재 화면을 텍스처로 복사 저장
+2. **전환 중**: 저장된 텍스처를 새 화면 위에 opacity로 블렌딩
+3. **완료**: 저장된 텍스처 해제
+
+```cpp
+// wiFadeManager.h에 추가
+enum class FadeType {
+    FadeToColor,  // 기존: 색상으로 페이드
+    CrossFade     // 신규: 이전 화면과 새 화면 크로스페이드
+} type = FadeType::FadeToColor;
+
+wi::graphics::Texture crossFadeTexture;  // 이전 화면 저장용
+bool crossFadeTextureSaveRequired = false;
+```
+
+```cpp
+// wiApplication.cpp - CrossFade 텍스처 저장
+if (fadeManager.crossFadeTextureSaveRequired)
+{
+    // rendertarget → crossFadeTexture 복사
+    graphicsDevice->Barrier(GPUBarrier::Image(&rendertarget, ..., ResourceState::COPY_SRC), cmd);
+    graphicsDevice->Barrier(GPUBarrier::Image(&fadeManager.crossFadeTexture, ..., ResourceState::COPY_DST), cmd);
+    graphicsDevice->CopyResource(&fadeManager.crossFadeTexture, &rendertarget, cmd);
+    // ... 배리어 복원
+    fadeManager.crossFadeTextureSaveRequired = false;
+}
+
+// Compose에서 페이드 렌더링
+if (fadeManager.type == FadeManager::FadeType::FadeToColor)
+{
+    fx.color = fadeManager.color;
+    wi::image::Draw(nullptr, fx, cmd);  // 색상 렉트
+}
+else if (fadeManager.type == FadeManager::FadeType::CrossFade)
+{
+    wi::image::Draw(&fadeManager.crossFadeTexture, fx, cmd);  // 이전 화면 블렌딩
+}
+```
+
+#### wiGraphicsDevice.h 변경 - RenderPassBegin 헬퍼
+
+```cpp
+// 추가된 오버로드
+void RenderPassBegin(const Texture* rendertarget, CommandList cmd, bool clear = true)
+{
+    RenderPassImage rp[] = {
+        RenderPassImage::RenderTarget(rendertarget,
+            clear ? RenderPassImage::LoadOp::CLEAR : RenderPassImage::LoadOp::LOAD),
+    };
+    RenderPassBegin(rp, arraysize(rp), cmd);
+}
+```
+
+**사용 전**:
+```cpp
+RenderPassImage rp[] = {
+    RenderPassImage::RenderTarget(&rendertarget, RenderPassImage::LoadOp::CLEAR),
+};
+graphicsDevice->RenderPassBegin(rp, arraysize(rp), cmd);
+```
+
+**사용 후**:
+```cpp
+graphicsDevice->RenderPassBegin(&rendertarget, cmd, true);
+```
+
+#### 기타 변경사항
+
+1. **EnsureRenderTargetValid()**: 렌더타겟 유효성 검사 함수 추가
+   - 크기 불일치 시 재생성
+   - HDR10 뿐만 아니라 항상 중간 렌더타겟 사용
+
+2. **SwapchainCompose()**: 렌더타겟 → 스왑체인 합성 분리
+   - HDR10 매핑 포함
+   - 코드 중복 제거
+
+3. **플랫폼 표시 개선**: InfoDisplay에 플랫폼 표시 추가
+   - `[Windows]`, `[Linux]`, `[PS5]`, `[Xbox]`
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked | VizMotive | 상태 |
+|------|--------|-----------|------|
+| FadeManager | ✅ 있음 | ❌ 없음 | **해당없음** |
+| CrossFade | ✅ 있음 | ❌ 없음 | **해당없음** |
+| ActivatePath | ✅ 있음 | ❌ 없음 | **해당없음** |
+| RenderPassBegin(Texture*) 헬퍼 | ✅ 있음 | ❌ 없음 | **미적용** |
+
+#### VizMotive 현황
+
+VizMotive는 Wicked의 `Application` / `RenderPath` / `FadeManager` 아키텍처를 사용하지 않음.
+- 자체 렌더링 파이프라인 구조
+- 씬 전환 시스템 없음 (단일 씬 렌더링 위주)
+
+#### 적용 가능한 부분
+
+**RenderPassBegin 헬퍼 함수**만 적용 가능:
+
+```cpp
+// VizMotive: GBackendDevice.h에 추가 가능
+void RenderPassBegin(const Texture* rendertarget, CommandList cmd, bool clear = true)
+{
+    RenderPassImage rp[] = {
+        RenderPassImage::RenderTarget(rendertarget,
+            clear ? RenderPassImage::LoadOp::CLEAR : RenderPassImage::LoadOp::LOAD),
+    };
+    RenderPassBegin(rp, arraysize(rp), cmd);
+}
+```
+
+#### 적용 권장사항
+
+| 우선순위 | 항목 | 이유 |
+|----------|------|------|
+| **낮음** | RenderPassBegin 헬퍼 | 편의성 개선 (기능 영향 없음) |
+| **해당없음** | CrossFade/FadeManager | VizMotive 아키텍처와 무관 |
+
+#### 결론
+
+이 커밋은 **Wicked의 Application 레벨 기능**으로, DX12 코어 변경이 아님.
+`wiGraphicsDevice.h` 수정은 단순 헬퍼 함수 추가일 뿐.
+
+VizMotive에서는:
+- CrossFade 기능 자체는 불필요 (아키텍처 다름)
+- RenderPassBegin 헬퍼는 선택적 적용 가능 (코드 단순화)
+
+---
+
+### #6. `4f503da8` - HDR improvements
+**날짜**: 2025-03-21 | **카테고리**: 기능 | **우선순위**: 중간
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | 14개 (+145줄, -106줄) |
+| 핵심 변경 | SWAPCHAIN ResourceState 추가, HDR10 렌더링 파이프라인 개선 |
+
+#### 배경: HDR10 렌더링 문제
+
+HDR10_ST2084 색공간에서는 블렌딩이 제대로 작동하지 않음:
+- HDR10은 **비선형 색공간** (Perceptual Quantizer)
+- 선형 블렌딩 수행 시 색상 왜곡 발생
+
+**해결 전략**:
+```
+[Linear Space]     [HDR10_ST2084]
+rendertargetPreHDR10 ────→ swapChain
+     ↑                        ↑
+  블렌딩/합성              최종 출력만
+```
+
+#### DX12 변경 1: SWAPCHAIN ResourceState 추가
+
+**wiGraphics.h**:
+```cpp
+enum class ResourceState {
+    // ... 기존 상태들 ...
+    VIDEO_DECODE_SRC = 1 << 15,
+    VIDEO_DECODE_DST = 1 << 16,
+    SWAPCHAIN = 1 << 17,  // ← 새로 추가
+};
+```
+
+**wiGraphicsDevice_DX12.cpp**:
+```cpp
+constexpr D3D12_RESOURCE_STATES _ConvertResourceStates(ResourceState value)
+{
+    // ... 기존 매핑 ...
+
+    if (has_flag(value, ResourceState::SWAPCHAIN))
+        ret |= D3D12_RESOURCE_STATE_PRESENT;  // PRESENT 상태로 매핑
+
+    return ret;
+}
+```
+
+#### DX12 변경 2: GetBackBuffer에서 layout 설정
+
+```cpp
+Texture GraphicsDevice_DX12::GetBackBuffer(const SwapChain* swapchain) const
+{
+    // ... 기존 코드 ...
+
+    Texture result;
+    result.type = GPUResource::Type::TEXTURE;
+    result.internal_state = internal_state;
+    result.desc = _ConvertTextureDesc_Inv(resourcedesc);
+    result.desc.layout = ResourceState::SWAPCHAIN;  // ← 새로 추가
+    return result;
+}
+```
+
+**목적**: 스왑체인 백버퍼의 초기 상태를 명시적으로 `SWAPCHAIN`(=PRESENT)으로 설정
+- 배리어 전환 시 올바른 시작 상태 보장
+- `ResourceState::UNDEFINED` 대신 명확한 상태 지정
+
+#### Application 레벨 변경
+
+**변경 전** (commit #5):
+```cpp
+// 항상 중간 렌더타겟 사용
+Texture rendertarget;  // 모든 경우에 사용
+void EnsureRenderTargetValid();
+void SwapchainCompose(CommandList cmd);
+```
+
+**변경 후**:
+```cpp
+// HDR10일 때만 중간 렌더타겟 사용
+Texture rendertargetPreHDR10;  // HDR10 전용
+
+// SDR/Linear HDR: 직접 스왑체인에 렌더링
+// HDR10: rendertargetPreHDR10 → swapChain 변환
+```
+
+```cpp
+void Application::Run()
+{
+    ColorSpace colorspace = graphicsDevice->GetSwapChainColorSpace(&swapChain);
+
+    if (colorspace == ColorSpace::HDR10_ST2084)
+    {
+        // HDR10: 중간 렌더타겟 필요
+        if (!rendertargetPreHDR10.IsValid())
+        {
+            TextureDesc desc;
+            desc.format = Format::R11G11B10_FLOAT;  // 선형 HDR 포맷
+            // ...
+            graphicsDevice->CreateTexture(&desc, nullptr, &rendertargetPreHDR10);
+        }
+    }
+    else
+    {
+        // SDR/Linear HDR: 중간 렌더타겟 불필요
+        rendertargetPreHDR10 = {};
+    }
+
+    // 렌더링
+    if (rendertargetPreHDR10.IsValid())
+    {
+        graphicsDevice->RenderPassBegin(&rendertargetPreHDR10, cmd, true);
+        Compose(cmd);
+        graphicsDevice->RenderPassEnd(cmd);
+
+        // HDR10 변환: Linear → HDR10_ST2084
+        graphicsDevice->RenderPassBegin(&swapChain, cmd);
+        wi::image::Params fx;
+        fx.enableFullScreen();
+        fx.enableHDR10OutputMapping();  // 톤매핑
+        wi::image::Draw(&rendertargetPreHDR10, fx, cmd);
+        graphicsDevice->RenderPassEnd(cmd);
+    }
+    else
+    {
+        // SDR/Linear: 직접 스왑체인에 렌더링
+        graphicsDevice->RenderPassBegin(&swapChain, cmd);
+        Compose(cmd);
+        graphicsDevice->RenderPassEnd(cmd);
+    }
+}
+```
+
+#### 제거된 함수
+
+```cpp
+// 더 이상 필요 없음
+void Application::SwapchainCompose(CommandList cmd);     // 제거
+void Application::EnsureRenderTargetValid();              // 제거
+Texture rendertarget;                                     // rendertargetPreHDR10로 대체
+```
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked (4f503da8 이후) | VizMotive (현재) | 상태 |
+|------|------------------------|------------------|------|
+| `ResourceState::SWAPCHAIN` | ✅ `1 << 17` | ❌ 없음 | **미적용** |
+| DX12 SWAPCHAIN → PRESENT 매핑 | ✅ 있음 | ❌ 없음 | **미적용** |
+| GetBackBuffer layout 설정 | ✅ `SWAPCHAIN` | ❌ 없음 (기본값) | **미적용** |
+| HDR10 중간 렌더타겟 | ✅ `rendertargetPreHDR10` | ❌ 해당없음 | **아키텍처 다름** |
+
+#### VizMotive 코드 현황
+
+**1. ResourceState - SWAPCHAIN 없음**
+```cpp
+// VizMotive: GBackend.h:484
+VIDEO_DECODE_DST = 1 << 16,  // 마지막 상태
+// SWAPCHAIN = 1 << 17 없음
+```
+
+**2. _ConvertResourceStates - SWAPCHAIN 매핑 없음**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:118-121
+if (has_flag(value, ResourceState::VIDEO_DECODE_DST))
+    ret |= D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE;
+
+return ret;  // SWAPCHAIN 처리 없음
+```
+
+**3. GetBackBuffer - layout 미설정**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:5938-5942
+Texture result;
+result.type = GPUResource::Type::TEXTURE;
+result.internal_state = internal_state;
+result.desc = _ConvertTextureDesc_Inv(resourcedesc);
+return result;  // desc.layout 설정 없음 (기본값 SHADER_RESOURCE)
+```
+
+#### 적용 필요 사항
+
+**1. wiGraphics.h / GBackend.h**
+```cpp
+enum class ResourceState {
+    // ...
+    VIDEO_DECODE_DST = 1 << 16,
++   SWAPCHAIN = 1 << 17,  // 추가
+};
+```
+
+**2. GraphicsDevice_DX12.cpp - _ConvertResourceStates**
+```cpp
+if (has_flag(value, ResourceState::VIDEO_DECODE_DST))
+    ret |= D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE;
+
++ if (has_flag(value, ResourceState::SWAPCHAIN))
++     ret |= D3D12_RESOURCE_STATE_PRESENT;
+
+return ret;
+```
+
+**3. GraphicsDevice_DX12.cpp - GetBackBuffer**
+```cpp
+Texture result;
+result.type = GPUResource::Type::TEXTURE;
+result.internal_state = internal_state;
+result.desc = _ConvertTextureDesc_Inv(resourcedesc);
++ result.desc.layout = ResourceState::SWAPCHAIN;
+return result;
+```
+
+#### 적용 권장사항
+
+| 우선순위 | 항목 | 이유 |
+|----------|------|------|
+| **중간** | SWAPCHAIN ResourceState 추가 | 배리어 전환 명확성 |
+| **중간** | GetBackBuffer layout 설정 | 스왑체인 상태 추적 정확성 |
+| **해당없음** | HDR10 중간 렌더타겟 | VizMotive 아키텍처와 무관 |
+
+#### 영향도
+
+현재 VizMotive에서 `GetBackBuffer()` 후 배리어 전환 시:
+- `desc.layout`이 기본값(`SHADER_RESOURCE`)
+- 실제 상태는 `PRESENT`
+- **잠재적 불일치** → 드라이버가 암묵적으로 처리하지만 명시적이지 않음
+
+SWAPCHAIN 상태 추가 시:
+- 배리어 `before` 상태가 정확해짐
+- 디버깅/검증 레이어에서 경고 감소 가능
+
+---
+
+### #7. `99c82676` - dx12 and vulkan improvements
+**날짜**: 2025-03-25 | **카테고리**: 개선 | **우선순위**: 중간
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | `wiGraphicsDevice_DX12.cpp` (-68줄, +54줄), `wiGraphicsDevice_DX12.h` (+2줄, -2줄) |
+| 핵심 변경 | CopyAllocator 단순화, StencilRef 캐싱, 프레임 펜스 워크플로우 개선 |
+
+#### 변경 1: CopyAllocator 대폭 단순화
+
+**변경 전**:
+```cpp
+struct CopyCMD {
+    uint64_t fenceValueSignaled = 0;  // 매번 증가
+    bool IsCompleted() const { return fence->GetCompletedValue() >= fenceValueSignaled; }
+};
+
+CopyCMD CopyAllocator::allocate(uint64_t staging_size) {
+    for (i : freelist) {
+        if (freelist[i].uploadbuffer.desc.size >= staging_size) {
+            if (freelist[i].IsCompleted()) {  // 완료 체크 후 재사용
+                cmd = std::move(freelist[i]);
+                // ...
+            }
+        }
+    }
+}
+
+void CopyAllocator::submit(CopyCMD cmd) {
+    locker.lock();
+    cmd.fenceValueSignaled++;
+    freelist.push_back(cmd);  // 먼저 freelist에 추가
+    locker.unlock();
+
+    queue->ExecuteCommandLists(1, commandlists);
+    queue->Signal(cmd.fence.Get(), cmd.fenceValueSignaled);
+
+    // GPU 대기 (다른 큐들이 복사 완료 대기)
+    device->queues[QUEUE_GRAPHICS].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+    device->queues[QUEUE_COMPUTE].queue->Wait(...);
+    // ...
+}
+```
+
+**변경 후**:
+```cpp
+struct CopyCMD {
+    // fenceValueSignaled 제거
+    // IsCompleted() 제거
+};
+
+CopyCMD CopyAllocator::allocate(uint64_t staging_size) {
+    for (i : freelist) {
+        if (freelist[i].uploadbuffer.desc.size >= staging_size) {
+            // IsCompleted() 체크 없이 바로 재사용
+            cmd = std::move(freelist[i]);
+            // ...
+        }
+    }
+    // 새 버퍼 생성 시 최소 크기 보장
+    uploaddesc.size = std::max(uploaddesc.size, uint64_t(65536));
+}
+
+void CopyAllocator::submit(CopyCMD cmd) {
+    cmd.commandList->Close();
+
+    cmd.fence->Signal(0);  // CPU에서 펜스 리셋
+
+    queue->ExecuteCommandLists(1, commandlists);
+    queue->Signal(cmd.fence.Get(), 1);  // GPU가 1로 시그널
+
+    cmd.fence->SetEventOnCompletion(1, nullptr);  // CPU 즉시 대기
+
+    std::scoped_lock lock(locker);
+    freelist.push_back(cmd);  // 완료 후 freelist에 추가
+}
+```
+
+**핵심 차이**:
+| 항목 | 변경 전 | 변경 후 |
+|------|---------|---------|
+| 펜스 값 | `fenceValueSignaled++` (증가) | 고정 `0` → `1` |
+| 완료 체크 | `IsCompleted()` 호출 | **제거** (항상 완료 상태) |
+| 동기화 | GPU Wait (다른 큐 대기) | **CPU Wait** (즉시 블로킹) |
+| freelist 추가 | 실행 전 | **실행 완료 후** |
+| 최소 버퍼 크기 | 없음 | **65536 바이트** |
+
+#### 변경 2: StencilRef 캐싱
+
+```cpp
+// wiGraphicsDevice_DX12.h - CommandList_DX12에 추가
+uint32_t prev_stencilref = 0;
+
+// reset()에서 초기화
+void reset() {
+    // ...
+    prev_stencilref = 0;
+}
+
+// wiGraphicsDevice_DX12.cpp
+void GraphicsDevice_DX12::BindStencilRef(uint32_t value, CommandList cmd)
+{
+    CommandList_DX12& commandlist = GetCommandList(cmd);
+    if (commandlist.prev_stencilref != value)  // 변경된 경우만
+    {
+        commandlist.prev_stencilref = value;
+        commandlist.GetGraphicsCommandList()->OMSetStencilRef(value);
+    }
+}
+```
+
+**효과**: 동일 값 반복 설정 시 DX12 호출 생략 → CPU 오버헤드 감소
+
+#### 변경 3: 프레임 펜스 워크플로우 개선
+
+**초기화 시 펜스 값 설정**:
+```cpp
+// 펜스 생성 직후
+dx12_check(frame_fence_cpu[buffer][queue]->Signal(1)); // 초기값 1 (free 상태)
+```
+
+**프레임 제출 시**:
+```cpp
+// 변경 전
+if (FRAMECOUNT >= BUFFERCOUNT && fence->GetCompletedValue() < 1) {
+    fence->SetEventOnCompletion(1, nullptr);
+}
+fence->Signal(0);  // 프레임 끝에서 리셋
+
+// 변경 후
+frame_fence_cpu->Signal(0);  // 프레임 시작에서 0으로 (in use)
+queue.submit();
+queue.queue->Signal(frame_fence_cpu, 1);  // GPU가 1로 (free)
+// ...
+if (fence->GetCompletedValue() < 1) {  // FRAMECOUNT 체크 제거
+    fence->SetEventOnCompletion(1, nullptr);
+}
+// fence->Signal(0) 제거 - 다음 프레임 시작에서 처리
+```
+
+**논리 흐름**:
+```
+Frame N 시작:
+  CPU Signal(fence, 0)     ← "이 버퍼 사용 중"
+  GPU 작업 제출
+  GPU Signal(fence, 1)     ← "작업 완료, 재사용 가능"
+
+Frame N+BUFFERCOUNT 시작:
+  CPU Signal(fence, 0)     ← 새 프레임 시작
+  (이전 GPU 작업 미완료 시)
+  CPU Wait(fence, 1)       ← GPU 완료 대기
+```
+
+#### 변경 4: Device Removed 로깅 개선
+
+```cpp
+// 변경 전 (DEBUG만)
+#ifdef _DEBUG
+    char buff[64] = {};
+    sprintf_s(buff, "Device Lost on Present: Reason code 0x%08X\n", ...);
+    OutputDebugStringA(buff);
+#endif
+
+// 변경 후 (항상)
+wilog_messagebox("Device Lost on Present: %s",
+    wi::helper::GetPlatformErrorString(...).c_str());
+```
+
+---
+
+#### VizMotive 비교
+
+#### 비교 항목
+
+| 항목 | Wicked (99c82676 이후) | VizMotive (현재) | 상태 |
+|------|------------------------|------------------|------|
+| CopyAllocator fenceValueSignaled | ❌ 제거 | ✅ 사용 중 | **미적용** |
+| CopyAllocator IsCompleted() | ❌ 제거 | ✅ 사용 중 | **미적용** |
+| CopyAllocator CPU Wait | ✅ CPU 대기 | ❌ GPU Wait | **미적용** |
+| StencilRef 캐싱 | ✅ prev_stencilref | ❌ 매번 호출 | **미적용** |
+| 펜스 초기값 Signal(1) | ✅ 있음 | ❌ 없음 | **미적용** |
+| 프레임 시작 Signal(0) | ✅ 있음 | ❌ 없음 | **미적용** |
+| FRAMECOUNT >= BUFFERCOUNT 체크 | ❌ 제거 | ✅ 있음 | **미적용** |
+
+#### VizMotive 코드 현황
+
+**1. CopyAllocator - 구버전 패턴**
+```cpp
+// VizMotive: GraphicsDevice_DX12.h:95-98
+uint64_t fenceValueSignaled = 0;  // 아직 사용 중
+inline bool IsCompleted() const { return fence->GetCompletedValue() >= fenceValueSignaled; }
+
+// VizMotive: GraphicsDevice_DX12.cpp:1703
+if (freelist[i].IsCompleted())  // 완료 체크 사용 중
+
+// VizMotive: GraphicsDevice_DX12.cpp:1766-1774
+// GPU Wait 패턴 사용 중
+hr = device->queues[QUEUE_GRAPHICS].queue->Wait(cmd.fence.Get(), cmd.fenceValueSignaled);
+hr = device->queues[QUEUE_COMPUTE].queue->Wait(...);
+hr = device->queues[QUEUE_COPY].queue->Wait(...);
+```
+
+**2. StencilRef - 캐싱 없음**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:6781-6785
+void GraphicsDevice_DX12::BindStencilRef(uint32_t value, CommandList cmd)
+{
+    CommandList_DX12& commandlist = GetCommandList(cmd);
+    commandlist.GetGraphicsCommandList()->OMSetStencilRef(value);  // 매번 호출
+}
+```
+
+**3. 프레임 펜스 - 구버전 워크플로우**
+```cpp
+// VizMotive: GraphicsDevice_DX12.cpp:5629-5636
+if (FRAMECOUNT >= BUFFERCOUNT && frame_fence[bufferindex][queue]->GetCompletedValue() < 1)
+{
+    hr = frame_fence[bufferindex][queue]->SetEventOnCompletion(1, NULL);
+}
+hr = frame_fence[bufferindex][queue]->Signal(0);  // 프레임 끝에서 리셋
+```
+
+#### 적용 권장사항
+
+| 우선순위 | 항목 | 이유 |
+|----------|------|------|
+| **중간** | StencilRef 캐싱 | CPU 오버헤드 감소 (간단한 수정) |
+| **중간** | CopyAllocator CPU Wait | 코드 단순화 (GPU Wait 제거) |
+| **낮음** | 펜스 워크플로우 변경 | 동작에 영향 없음, 논리 명확성 개선 |
+
+#### 적용 예시: StencilRef 캐싱
+
+```cpp
+// GraphicsDevice_DX12.h - CommandList_DX12에 추가
++ uint32_t prev_stencilref = 0;
+
+// reset()에 추가
++ prev_stencilref = 0;
+
+// GraphicsDevice_DX12.cpp - BindStencilRef 수정
+void GraphicsDevice_DX12::BindStencilRef(uint32_t value, CommandList cmd)
+{
+    CommandList_DX12& commandlist = GetCommandList(cmd);
++   if (commandlist.prev_stencilref != value)
++   {
++       commandlist.prev_stencilref = value;
+        commandlist.GetGraphicsCommandList()->OMSetStencilRef(value);
++   }
+}
+```
+
+---
+
+### #8. `b1b708d2` - camera render texture can be set to material
+**날짜**: 2025-03-26 | **카테고리**: 기능 | **우선순위**: 중간
+
+**DX12 변경**:
+```cpp
+// DISABLE_RENDERPASS 매크로 도입 (Xbox용)
+#ifdef PLATFORM_XBOX
+#define DISABLE_RENDERPASS
+#endif
+
+// RenderPassEnd 개선 - 리졸브 배리어 처리
+if (!commandlist.resolve_src_barriers.empty()) {
+    commandlist.GetGraphicsCommandList()->ResourceBarrier(...);
+}
+```
+
+Xbox에서 RenderPass API 비활성화 옵션 추가.
+
+---
+
+### #9. `fe3b922f` - Terrain spline material
+**날짜**: 2025-04-25 | **카테고리**: 버그수정 | **우선순위**: 낮음
+
+**커밋 내용**: 터레인 스플라인 머티리얼 기능 + GUI 개선 (31개 파일, +226/-362줄)
+
+**DX12 변경** (4줄만): CopyAllocator 에러 체크 추가
+```cpp
+// 변경 전
+cmd.commandList->Close();
+cmd.fence->Signal(0);
+
+// 변경 후
+dx12_check(cmd.commandList->Close());
+dx12_check(cmd.fence->Signal(0));
+```
+
+**VizMotive**: 에러 체크 없이 `hr =` 또는 직접 호출 → 선택적 적용 (디버깅 용이성)
+
+---
+
+### #10. `30917c9e` - GPU buffer suballocator
+**날짜**: 2025-04-28 | **카테고리**: 성능 | **우선순위**: 중간
+
+#### 변경 개요
+| 항목 | 내용 |
+|------|------|
+| 수정 파일 | 20개 파일, +993줄 -56줄 |
+| 핵심 변경 | 메시 인덱스 버퍼 서브할당으로 버퍼 전환 최소화 |
+
+#### 문제
+- 각 메시가 개별 `generalBuffer` → 드로우 콜마다 `BindIndexBuffer()` 호출
+- 버퍼 전환은 GPU 상태 변경 비용 발생
+
+#### 해결: GPU 버퍼 서브할당 시스템
+
+**1. offsetAllocator 라이브러리 추가**
+```cpp
+// 새 파일: Utility/offsetAllocator.cpp/hpp
+// 외부 라이브러리 - O(1) 서브할당 알고리즘
+```
+
+**2. PageAllocator 래퍼 클래스** (`wiAllocator.h`)
+```cpp
+struct PageAllocator {
+    uint32_t page_count = 0;
+    uint32_t page_size = 0;  // 기본 64KB
+
+    // 스레드 세이프 + 참조 카운팅 + Deferred Release 지원
+    struct AllocationInternal {
+        std::atomic<int> refcount{ 0 };
+        OffsetAllocator::Allocation allocation;
+    };
+
+    // GPU 리소스용 지연 해제 (버퍼링 프레임 수만큼 대기)
+    bool deferred_release_enabled = false;
+    std::deque<std::pair<Allocation, uint64_t>> deferred_release_queue;
+};
+```
+
+**3. GPUSubAllocator 시스템** (`wiRenderer.cpp`)
+```cpp
+struct GPUSubAllocator {
+    static constexpr uint64_t blocksize = 256ull * 1024ull * 1024ull; // 256 MB
+    struct Block {
+        wi::allocator::PageAllocator allocator;
+        GPUBuffer buffer;  // VERTEX_BUFFER | INDEX_BUFFER | SHADER_RESOURCE
+    };
+    wi::vector<Block> blocks;  // 필요시 새 블록 할당
+};
+
+BufferSuballocation SuballocateGPUBuffer(uint64_t size) {
+    // 블록 크기의 절반 이상은 서브할당 불가
+    if (size > blocksize / 2) return {};  // 개별 버퍼로 폴백
+
+    // 기존 블록에서 할당 시도 → 실패시 새 블록 생성
+}
+```
+
+**4. MeshComponent 변경** (`wiScene_Components.h`)
+```cpp
+// 추가된 멤버
+wi::allocator::PageAllocator::Allocation generalBufferOffsetAllocation;
+wi::graphics::GPUBuffer generalBufferOffsetAllocationAlias;
+```
+
+**5. 렌더링 시 최적화** (`wiRenderer.cpp:RenderMeshes`)
+```cpp
+// 서브할당된 경우 별칭 버퍼 사용
+const GPUBuffer* ib = mesh.generalBufferOffsetAllocation.IsValid()
+    ? &mesh.generalBufferOffsetAllocationAlias
+    : &mesh.generalBuffer;
+
+// internal_state 비교로 실제 버퍼 변경 시에만 바인딩
+if (prev_ib_internal != ib->internal_state.get() || prev_ibformat != ibformat) {
+    device->BindIndexBuffer(ib, ibformat, 0, cmd);
+}
+
+// 인덱스 오프셋 계산
+uint32_t indexOffset = mesh.generalBufferOffsetAllocation.IsValid()
+    ? (allocation.byte_offset + mesh.ib.offset) / stride + subset.indexOffset
+    : mesh.ib.offset / stride + subset.indexOffset;
+```
+
+#### DX12 특화 변경
+```cpp
+// 1. 얼라인먼트 처리 (wiGraphicsDevice_DX12.h)
+if (has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_BUFFER)) {
+    alignment = std::max(alignment, (uint64_t)D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+}
+
+// 2. 디버그 메시지 억제 (wiGraphicsDevice_DX12.cpp)
+// 서브할당으로 인한 힙 주소 중복 경고 무시
+disabledMessages.push_back(D3D12_MESSAGE_ID_HEAP_ADDRESS_RANGE_INTERSECTS_MULTIPLE_BUFFERS);
+
+// 3. CreateBufferZeroed/Cleared 확장 (wiGraphicsDevice.h)
+// 별칭 버퍼 오프셋 파라미터 추가
+bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer,
+                        const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull);
+```
+
+#### VizMotive 비교
+
+| 항목 | Wicked (신규) | VizMotive (현재) |
+|------|---------------|------------------|
+| 버퍼 방식 | 256MB 블록에서 서브할당 | 메시별 개별 버퍼 |
+| 버퍼 전환 | IndexFormat 변경 시에만 | 메시마다 전환 |
+| 메모리 관리 | PageAllocator + Deferred Release | 개별 해제 |
+| Aliasing | ResourceMiscFlag::ALIASING_BUFFER | 미지원 |
+
+**현재 VizMotive 코드** (`Renderer.cpp:591`):
+```cpp
+// 메시마다 버퍼 전환
+if (!is_meshshader_pso && prev_ib != &part_buffer.generalBuffer) {
+    device->BindIndexBuffer(&part_buffer.generalBuffer, ...);
+    prev_ib = &part_buffer.generalBuffer;
+}
+```
+
+#### 적용 권장
+- **우선순위**: 중간 (많은 메시 사용 시 성능 이슈에 따라)
+- **적용 범위**: 상당한 규모 (새 할당 시스템 전체 도입)
+- **주의사항**:
+  - 메모리 단편화 발생 가능
+  - 큰 메시(>128MB)는 여전히 개별 버퍼
+  - 디버깅 복잡도 증가
+
+---
+
+### #11. `8582ea3d` - Terrain determinism fixes
+**날짜**: 2025-04-28 | **카테고리**: 버그수정 | **우선순위**: 중간
+
+**DX12 변경**: PSO 바인딩 최적화
+```cpp
+// static PSO 조기 종료 추가
+else
+    return; // early exit for static pso
+
+// dynamic PSO 캐싱 개선
+if (commandlist.prev_pipeline_hash == pipeline_hash) {
+    commandlist.active_pso = pso;  // 이 줄 추가!
+    return; // early exit for dynamic pso|renderpass
+}
+```
+
+**VizMotive 비교**:
+- VizMotive (`GraphicsDevice_DX12.cpp:6839`)는 early exit 시 `active_pso = pso` 설정 안함 → 잠재적 버그
+- static PSO 블록 뒤 `else return;` 없음
+- **적용 권장**: 중간 (PSO 상태 일관성)
+
+---
+
+### #12. `a948117e` - textured rectangle lights
+**날짜**: 2025-05-18 | **카테고리**: 기능 | **우선순위**: 낮음
+
+**DX12 변경**: `wiGraphicsDevice.h`에 헬퍼 추가
+```cpp
+void CreateMipgenSubresources(Texture& texture);
+```
+
+**VizMotive**: 해당 헬퍼 없음 → 필요시 추가
+
+---
+
+### #13. `e6a003cd` - stringconvert replacement
+**날짜**: 2025-05-20 | **카테고리**: 리팩토링/안정성 | **우선순위**: 중간
+
+**변경 내용**:
+1. **버퍼 크기 필수화**: `dest_size_in_characters` 기본값 제거 → 필수 파라미터
+2. **커스텀 UTF-8 구현**: Windows API/deprecated std::wstring_convert 제거
+3. **크로스 플랫폼**: 모든 플랫폼에서 동일한 동작
+
+```cpp
+// 변경 전 - 기본값 -1 (위험)
+int StringConvert(const wchar_t* from, char* to, int dest_size = -1);
+
+// 변경 후 - 크기 필수
+int StringConvert(const wchar_t* from, char* to, int dest_size);
+```
+
+**VizMotive 문제점** (`Helpers.h:87-135`):
+1. **버퍼 오버플로우**: `dest_size_in_characters = -1` 기본값 유지
+2. **Deprecated API**: `std::wstring_convert` 사용 (C++17에서 deprecated)
+3. **UB 버그**: 비-Windows에서 임시 객체 포인터 반환
+   ```cpp
+   // Line 102 - 버그!
+   auto result = cv.from_bytes(from).c_str();  // 임시 객체 → dangling pointer
+   ```
+4. **플랫폼 차이**: Windows API vs deprecated STL
+
+**적용 권장**: 중간 (안정성 + 크로스플랫폼 + deprecated 제거)
+
+---
+
+### #14. `96f267e1` - improved shadow bias
+**날짜**: 2025-05-24 | **카테고리**: 렌더링 | **우선순위**: 낮음
+
+**DX12 변경**: PSO 스트림에 Flags 필드 추가
+```cpp
+struct PSO_STREAM1 {
+    CD3DX12_PIPELINE_STATE_STREAM_FLAGS Flags;  // 새로 추가
+};
+// D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS는 Windows 10에서 미작동
+```
+
+**VizMotive**: `PSO_STREAM1`에 `Flags` 필드 없음 → Win11 dynamic depth bias 사용시 필요
+
+---
+
+### #15. `a44d321b` - removal of libraries
+**날짜**: 2025-06-03 | **카테고리**: 리팩토링 | **우선순위**: 낮음
+
+**DX12 변경**: `dxva.h` 경로 변경 (Utility → 시스템 헤더)
+
+**VizMotive**: 해당 없음 (비디오 관련)
+
+---
+
+### #16. `df69a706` - dx12 root signature desc life extender
+**날짜**: 2025-06-14 | **카테고리**: 안정성 | **우선순위**: 높음
+
+**문제**: PSO가 rootsig_desc 포인터를 쉐이더에서 복사 → 쉐이더 먼저 삭제시 dangling pointer
+
+**해결**:
+```cpp
+// PipelineState_DX12에 추가
+std::shared_ptr<void> rootsig_desc_lifetime_extender;
+
+// PSO 생성시
+internal_state->rootsig_desc_lifetime_extender = pso->desc.vs->internal_state;
+```
+
+**VizMotive**: `rootsig_desc_lifetime_extender` 없음 → **잠재적 크래시 버그**
+- 쉐이더 리로드/삭제 시나리오에서 문제 발생 가능
+- **적용 권장**: 높음
+
+---
+
+### #17. `6c973af6` - block compressed texture saving fix
+**날짜**: 2025-06-28 | **카테고리**: 버그수정 | **우선순위**: 중간
+
+**문제**: BC 텍스처 크기가 블록 크기의 배수가 아닐 때 블록 수 계산 오류
+
+```cpp
+// 변경 전 - 잘못된 계산 (100/4 = 25)
+const uint32_t num_blocks_x = desc.width / pixels_per_block;
+
+// 변경 후 - ceiling division ((100+3)/4 = 26)
+const uint32_t num_blocks_x = (mip_width + pixels_per_block - 1) / pixels_per_block;
+```
+
+**VizMotive**: 동일한 버그 존재
+- `GBackend.h:1876`: `num_blocks_x = desc.width / pixels_per_block`
+- `Helpers2.cpp:120`: 같은 문제
+- **적용 권장**: 중간 (비정렬 BC 텍스처 저장시 데이터 손실)
+
+---
+
+### #18. `6cc52406` - prevent clang warning
+**날짜**: 2025-07-13 | **카테고리**: 빌드/보안 | **우선순위**: 낮음
+
+**문제**: 포맷 문자열 취약점 (Format String Vulnerability)
+```cpp
+// 변경 전 - 취약: error에 %s, %n 포함시 문제
+wilog_messagebox(error.c_str());
+
+// 변경 후 - 안전: error는 인자로만 사용
+wilog_messagebox("%s", error.c_str());
+```
+
+**VizMotive**: 해당 없음
+- `vz::helper::messageBox(const std::string&)` 사용 → 포맷 문자열 아님
+- 직접 문자열 전달 방식으로 취약점 없음
+
+---
+
+### #19. `e9d5cd09` - texture swizzle improvement
+**날짜**: 2025-08-15 | **카테고리**: 기능 | **우선순위**: 낮음
+
+**변경**: 스위즐 파싱에서 xyzw 표기법도 인식
+```cpp
+// rgba 외에 xyzw도 동일하게 처리
+case 'x': case 'X': *comp = ComponentSwizzle::R; break;
+case 'y': case 'Y': *comp = ComponentSwizzle::G; break;
+case 'z': case 'Z': *comp = ComponentSwizzle::B; break;
+case 'w': case 'W': *comp = ComponentSwizzle::A; break;
+```
+
+**VizMotive**: `SwizzleFromString()` (`GBackend.h:1795`)에서 rgba만 지원
+- xyzw 표기법 미지원
+- 스크립트/에디터에서 xyzw 사용시 적용 검토
+- **적용 권장**: 낮음 (편의 기능)
+
+---
+
+## VizMotive 적용 우선순위
+
+### 높음 (안정성) - 즉시 적용 검토
+| # | 커밋 | 내용 | VizMotive 문제 |
+|---|------|------|----------------|
+| 3 | `93ebdaa6` | CPU/GPU 펜스 분리 | 단일 펜스 → Race condition |
+| 4 | `dc532889` | 버퍼 초기화 | Indirect 버퍼 미초기화 |
+| 16 | `df69a706` | Root signature 수명 | dangling pointer → 크래시 |
+| 2 | `3f5a5cc6` | 펜스 명명, 큐 동기화 | 디버깅 어려움 |
+
+### 중간 (성능/기능) - 필요시 적용
+| # | 커밋 | 내용 | VizMotive 문제 |
+|---|------|------|----------------|
+| 13 | `e6a003cd` | StringConvert 리팩토링 | deprecated API + UB 버그 + 버퍼 오버플로우 |
+| 17 | `6c973af6` | BC 텍스처 블록 계산 | ceiling division 누락 → 데이터 손실 |
+| 11 | `8582ea3d` | PSO 캐싱 개선 | early exit시 active_pso 미설정 |
+| 7 | `99c82676` | StencilRef 캐싱 | 불필요한 API 호출 |
+| 6 | `4f503da8` | SWAPCHAIN ResourceState | 상태 명시성 부족 |
+| 10 | `30917c9e` | GPU 버퍼 서브할당자 | 버퍼 전환 오버헤드 |
+
+### 낮음 - 선택적 적용
+| # | 커밋 | 내용 |
+|---|------|------|
+| 1 | `bf27a9fb` | WaitQueue 제거 |
+| 5, 12 | `652fe0da`, `a948117e` | 헬퍼 함수들 |
+| 8 | `b1b708d2` | DISABLE_RENDERPASS |
+| 9 | `fe3b922f` | dx12_check 에러 체크 |
+| 14-15, 18-19 | 기타 | PSO Flags/빌드/스위즐 |
+
+---
+
+## 다음 단계
+
+1. **#16 적용**: `rootsig_desc_lifetime_extender` 추가 (크래시 방지)
+2. **#3, #4 적용**: 펜스 분리 + 버퍼 초기화
+3. **#17 적용**: BC 텍스처 ceiling division 수정
+4. **#11 적용**: PSO early exit 시 `active_pso` 설정
+5. 성능 이슈 발생시 #10 버퍼 서브할당자 검토
