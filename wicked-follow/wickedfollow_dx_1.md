@@ -51,7 +51,7 @@
 
 ---
 
-### #1. `bf27a9fb` - Linux hang fix
+### #1. `bf27a9fb` - Linux hang fix ✅ 적용 완료
 **날짜**: 2025-03-12 | **카테고리**: 안정성 | **우선순위**: 중간
 
 **문제**: `WaitQueue()`가 Linux에서 행(hang) 유발
@@ -126,7 +126,7 @@ void GraphicsDevice_DX12::WaitQueue(CommandList cmd, QUEUE_TYPE wait_for)
 
 ---
 
-### #2. `3f5a5cc6` - dx12 and vulkan additional safety updates
+### #2. `3f5a5cc6` - dx12 and vulkan additional safety updates ✅ 적용 완료
 **날짜**: 2025-03-15 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -397,7 +397,7 @@ for (int q = 0; q < QUEUE_COUNT; ++q)
 
 ---
 
-### #3. `93ebdaa6` - dx12 separated cpu and gpu fences
+### #3. `93ebdaa6` - dx12 separated cpu and gpu fences ✅ 적용 완료
 **날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -652,7 +652,7 @@ dx12_check(fence->Signal(0));  // Wait 후 Signal(0)으로 in-use 마킹
 
 ---
 
-### #4. `dc532889` - xbox gpu hang fix
+### #4. `dc532889` - xbox gpu hang fix ✅ 적용 완료
 **날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -1034,7 +1034,7 @@ VizMotive에서는:
 
 ---
 
-### #6. `4f503da8` - HDR improvements
+### #6. `4f503da8` - HDR improvements ✅ 적용 완료
 **날짜**: 2025-03-21 | **카테고리**: 기능 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1287,7 +1287,7 @@ SWAPCHAIN 상태 추가 시:
 
 ---
 
-### #7. `99c82676` - dx12 and vulkan improvements
+### #7. `99c82676` - dx12 and vulkan improvements ✅ 적용 완료
 **날짜**: 2025-03-25 | **카테고리**: 개선 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1616,7 +1616,7 @@ dx12_check(cmd.fence->Signal(0));
 
 ---
 
-### #10. `30917c9e` - GPU buffer suballocator
+### #10. `30917c9e` - GPU buffer suballocator ✅ 적용 완료
 **날짜**: 2025-04-28 | **카테고리**: 성능 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1663,7 +1663,7 @@ dx12_check(cmd.fence->Signal(0));
 
 ---
 
-### #11. `8582ea3d` - Terrain determinism fixes
+### #11. `8582ea3d` - Terrain determinism fixes ✅ 적용 완료
 **날짜**: 2025-04-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
 **DX12 변경**: PSO 바인딩 최적화
@@ -1739,7 +1739,7 @@ void CreateMipgenSubresources(Texture& texture);
 
 ---
 
-### #13. `e6a003cd` - stringconvert replacement
+### #13. `e6a003cd` - stringconvert replacement ✅ 적용 완료
 **날짜**: 2025-05-20 | **카테고리**: 리팩토링/안정성 | **우선순위**: 중간
 
 **변경 내용**:
@@ -1837,7 +1837,7 @@ struct PSO_STREAM1 {
 
 ---
 
-### #16. `df69a706` - dx12 root signature desc life extender
+### #16. `df69a706` - dx12 root signature desc life extender ✅ 적용 완료
 **날짜**: 2025-06-14 | **카테고리**: 안정성 | **우선순위**: 높음
 
 **문제**: PSO가 rootsig_desc 포인터를 쉐이더에서 복사 → 쉐이더 먼저 삭제시 dangling pointer
