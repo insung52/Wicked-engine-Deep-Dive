@@ -1539,6 +1539,41 @@ void GraphicsDevice_DX12::BindStencilRef(uint32_t value, CommandList cmd)
 }
 ```
 
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2025-01-26
+
+**1. CopyAllocator 단순화**
+
+| 파일 | 라인 | 변경 |
+|------|------|------|
+| `GraphicsDevice_DX12.h` | 95-98 | `fenceValueSignaled`, `IsCompleted()` 제거 |
+| `GraphicsDevice_DX12.cpp` | 1700-1712 | `IsCompleted()` 체크 제거 |
+| `GraphicsDevice_DX12.cpp` | 1746-1768 | submit: 고정 0→1 패턴, freelist 완료 후 추가 |
+
+```cpp
+// submit 변경 내용
+dx12_check(cmd.commandList->Close());
+dx12_check(cmd.fence->Signal(0)); // Reset to 0
+queue->ExecuteCommandLists(1, commandlists);
+dx12_check(queue->Signal(cmd.fence.Get(), 1)); // Signal 1
+dx12_check(cmd.fence->SetEventOnCompletion(1, nullptr)); // CPU wait
+std::scoped_lock lock(locker);
+freelist.push_back(cmd); // Add after completion
+```
+
+**2. StencilRef 캐싱**
+
+| 파일 | 라인 | 변경 |
+|------|------|------|
+| `GraphicsDevice_DX12.h` | 177 | `prev_stencilref` 멤버 추가 |
+| `GraphicsDevice_DX12.h` | 211 | `reset()`에서 초기화 |
+| `GraphicsDevice_DX12.cpp` | 6787-6795 | 값 변경 시에만 호출 |
+
+**효과**:
+- CopyAllocator 논리 단순화 (fenceValue 증가 불필요)
+- StencilRef 중복 API 호출 방지
+
 ---
 
 ### #8. `b1b708d2` - camera render texture can be set to material
@@ -1588,124 +1623,43 @@ dx12_check(cmd.fence->Signal(0));
 | 항목 | 내용 |
 |------|------|
 | 수정 파일 | 20개 파일, +993줄 -56줄 |
-| 핵심 변경 | 메시 인덱스 버퍼 서브할당으로 버퍼 전환 최소화 |
+| 핵심 변경 | 메시 버퍼를 256MB 블록에서 서브할당하여 버퍼 전환 최소화 |
 
-#### 문제
-- 각 메시가 개별 `generalBuffer` → 드로우 콜마다 `BindIndexBuffer()` 호출
-- 버퍼 전환은 GPU 상태 변경 비용 발생
+#### WickedEngine 방식의 문제점
+- `CreateAliasingResource()`로 별도의 ID3D12Resource 생성
+- Debug Layer에서 `D3D12_MESSAGE_ID_HEAP_ADDRESS_RANGE_INTERSECTS_MULTIPLE_BUFFERS` 경고 발생
+- 경고 필터링으로 억제 필요
 
-#### 해결: GPU 버퍼 서브할당 시스템
+#### VizMotive 적용 완료 ✅
 
-**1. offsetAllocator 라이브러리 추가**
-```cpp
-// 새 파일: Utility/offsetAllocator.cpp/hpp
-// 외부 라이브러리 - O(1) 서브할당 알고리즘
-```
+**적용 일자**: 2026-01-27
 
-**2. PageAllocator 래퍼 클래스** (`wiAllocator.h`)
-```cpp
-struct PageAllocator {
-    uint32_t page_count = 0;
-    uint32_t page_size = 0;  // 기본 64KB
+**VizMotive 개선**: WickedEngine과 달리 **순수 오프셋 기반 뷰 방식** 채택
+- `CreateAliasingResource()` 사용하지 않음
+- 단일 256MB 블록 버퍼 + 오프셋 기반 SRV/UAV 뷰
+- Debug Layer 경고 없이 동작 (경고 필터링 불필요)
 
-    // 스레드 세이프 + 참조 카운팅 + Deferred Release 지원
-    struct AllocationInternal {
-        std::atomic<int> refcount{ 0 };
-        OffsetAllocator::Allocation allocation;
-    };
+**상세 구현 문서**: [GPU Buffer Suballocation Without Debug Layer Warnings](<!-- LINK_PLACEHOLDER -->)
 
-    // GPU 리소스용 지연 해제 (버퍼링 프레임 수만큼 대기)
-    bool deferred_release_enabled = false;
-    std::deque<std::pair<Allocation, uint64_t>> deferred_release_queue;
-};
-```
+#### 핵심 변경 요약
 
-**3. GPUSubAllocator 시스템** (`wiRenderer.cpp`)
-```cpp
-struct GPUSubAllocator {
-    static constexpr uint64_t blocksize = 256ull * 1024ull * 1024ull; // 256 MB
-    struct Block {
-        wi::allocator::PageAllocator allocator;
-        GPUBuffer buffer;  // VERTEX_BUFFER | INDEX_BUFFER | SHADER_RESOURCE
-    };
-    wi::vector<Block> blocks;  // 필요시 새 블록 할당
-};
+| 항목 | WickedEngine | VizMotive |
+|------|--------------|-----------|
+| 블록 버퍼 플래그 | `ALIASING_BUFFER` | 일반 버퍼 |
+| 메시별 Resource | `CreateAliasingResource()` | 없음 (포인터 참조) |
+| 데이터 저장 | `generalBufferOffsetAllocationAlias` (복사본) | `blockBufferRef` + `blockBaseOffset` |
+| Debug Layer | 경고 필터링 필요 | 경고 없음 |
 
-BufferSuballocation SuballocateGPUBuffer(uint64_t size) {
-    // 블록 크기의 절반 이상은 서브할당 불가
-    if (size > blocksize / 2) return {};  // 개별 버퍼로 폴백
+**변경 파일**:
+- `GraphicsDevice_DX12.cpp` - 경고 필터 제거, `UploadToBufferRegion()` 추가
+- `GBackend.h` - `BufferSuballocation` 포인터 방식으로 변경
+- `GComponents.h` - `GPrimBuffers`에 `blockBufferRef`, `blockBaseOffset`, 헬퍼 메서드 추가
+- `Renderer.cpp` - `ALIASING_BUFFER` 플래그 제거, VB/IB 바인딩 로직 수정
+- `GeometryComponent.cpp` - 절대 offset 기반 뷰 생성, Raytracing BLAS 수정
 
-    // 기존 블록에서 할당 시도 → 실패시 새 블록 생성
-}
-```
-
-**4. MeshComponent 변경** (`wiScene_Components.h`)
-```cpp
-// 추가된 멤버
-wi::allocator::PageAllocator::Allocation generalBufferOffsetAllocation;
-wi::graphics::GPUBuffer generalBufferOffsetAllocationAlias;
-```
-
-**5. 렌더링 시 최적화** (`wiRenderer.cpp:RenderMeshes`)
-```cpp
-// 서브할당된 경우 별칭 버퍼 사용
-const GPUBuffer* ib = mesh.generalBufferOffsetAllocation.IsValid()
-    ? &mesh.generalBufferOffsetAllocationAlias
-    : &mesh.generalBuffer;
-
-// internal_state 비교로 실제 버퍼 변경 시에만 바인딩
-if (prev_ib_internal != ib->internal_state.get() || prev_ibformat != ibformat) {
-    device->BindIndexBuffer(ib, ibformat, 0, cmd);
-}
-
-// 인덱스 오프셋 계산
-uint32_t indexOffset = mesh.generalBufferOffsetAllocation.IsValid()
-    ? (allocation.byte_offset + mesh.ib.offset) / stride + subset.indexOffset
-    : mesh.ib.offset / stride + subset.indexOffset;
-```
-
-#### DX12 특화 변경
-```cpp
-// 1. 얼라인먼트 처리 (wiGraphicsDevice_DX12.h)
-if (has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_BUFFER)) {
-    alignment = std::max(alignment, (uint64_t)D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
-}
-
-// 2. 디버그 메시지 억제 (wiGraphicsDevice_DX12.cpp)
-// 서브할당으로 인한 힙 주소 중복 경고 무시
-disabledMessages.push_back(D3D12_MESSAGE_ID_HEAP_ADDRESS_RANGE_INTERSECTS_MULTIPLE_BUFFERS);
-
-// 3. CreateBufferZeroed/Cleared 확장 (wiGraphicsDevice.h)
-// 별칭 버퍼 오프셋 파라미터 추가
-bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer,
-                        const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull);
-```
-
-#### VizMotive 비교
-
-| 항목 | Wicked (신규) | VizMotive (현재) |
-|------|---------------|------------------|
-| 버퍼 방식 | 256MB 블록에서 서브할당 | 메시별 개별 버퍼 |
-| 버퍼 전환 | IndexFormat 변경 시에만 | 메시마다 전환 |
-| 메모리 관리 | PageAllocator + Deferred Release | 개별 해제 |
-| Aliasing | ResourceMiscFlag::ALIASING_BUFFER | 미지원 |
-
-**현재 VizMotive 코드** (`Renderer.cpp:591`):
-```cpp
-// 메시마다 버퍼 전환
-if (!is_meshshader_pso && prev_ib != &part_buffer.generalBuffer) {
-    device->BindIndexBuffer(&part_buffer.generalBuffer, ...);
-    prev_ib = &part_buffer.generalBuffer;
-}
-```
-
-#### 적용 권장
-- **우선순위**: 중간 (많은 메시 사용 시 성능 이슈에 따라)
-- **적용 범위**: 상당한 규모 (새 할당 시스템 전체 도입)
-- **주의사항**:
-  - 메모리 단편화 발생 가능
-  - 큰 메시(>128MB)는 여전히 개별 버퍼
-  - 디버깅 복잡도 증가
+**기반 인프라** (2025-01-26 적용):
+- `offsetAllocator` 라이브러리 추가 (`EngineCore/ThirdParty/`)
+- `PageAllocator` 클래스 추가 (`EngineCore/Utils/Allocator.h`)
 
 ---
 
@@ -1730,6 +1684,30 @@ if (commandlist.prev_pipeline_hash == pipeline_hash) {
 - static PSO 블록 뒤 `else return;` 없음
 - **적용 권장**: 중간 (PSO 상태 일관성)
 
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2026-01-27
+**VizMotive 커밋**: `2b18b324`
+
+**적용 내용** (`GraphicsDevice_DX12.cpp`):
+```cpp
+// 1. static PSO 조기 종료 추가 (line 6843)
+else
+    return; // early exit for static pso
+
+// 2. dynamic PSO 캐싱 개선 (line 6855-6857)
+if (commandlist.prev_pipeline_hash == pipeline_hash) {
+    commandlist.active_pso = pso;  // 누락되었던 부분 추가
+    return; // early exit for dynamic pso|renderpass
+}
+```
+
+**수정 효과**:
+- PSO 해시가 일치해도 `active_pso`가 갱신되지 않아 발생할 수 있는 불일치 버그 수정
+- static PSO 경로에서 불필요한 해시 계산/비교 회피
+
+**참고**: 이 커밋의 본래 목적인 "Terrain determinism"은 `wiNoise.h`의 크로스 플랫폼 결정론적 노이즈 구현 관련이며, DX12 변경은 부수적인 PSO 최적화임
+
 ---
 
 ### #12. `a948117e` - textured rectangle lights
@@ -1740,7 +1718,24 @@ if (commandlist.prev_pipeline_hash == pipeline_hash) {
 void CreateMipgenSubresources(Texture& texture);
 ```
 
-**VizMotive**: 해당 헬퍼 없음 → 필요시 추가
+#### VizMotive 해당 없음 ⏭️
+
+**분석 일자**: 2026-01-27
+
+**이유**: VizMotive는 동일한 로직을 이미 인라인으로 구현하고 있음
+
+| 위치 | 텍스처 | 구현 방식 |
+|------|--------|----------|
+| `Renderer.cpp:197-208` | bloom 2개 | 인라인 루프 |
+| `Renderer.cpp:1077-1088` | rtSceneCopy 2개 | 인라인 루프 |
+| `Renderer.cpp:1155-1166` | depthBuffer_Copy 2개 | 인라인 루프 |
+| `Renderer.cpp:1180-1187` | rtLinearDepth 1개 | 인라인 루프 |
+
+**차이점**:
+- WickedEngine: 헬퍼로 텍스처 1개씩 처리
+- VizMotive: 2개 텍스처를 한 루프에서 처리 (약간 효율적)
+
+**결론**: 기능적 차이 없음, 코드 정리 수준의 변경이므로 적용 불필요
 
 ---
 
@@ -1770,7 +1765,35 @@ int StringConvert(const wchar_t* from, char* to, int dest_size);
    ```
 4. **플랫폼 차이**: Windows API vs deprecated STL
 
-**적용 권장**: 중간 (안정성 + 크로스플랫폼 + deprecated 제거)
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2026-01-27
+
+**적용 내용**:
+
+1. **`Helpers.h`** - StringConvert 4개 함수 전면 교체 (~250줄)
+   - 커스텀 UTF-8 인코딩/디코딩 구현
+   - `std::wstring_convert` 제거 (deprecated)
+   - Windows API (`MultiByteToWideChar`/`WideCharToMultiByte`) 제거
+   - `dest_size_in_characters` 기본값 `-1` 제거 → 필수 파라미터
+   - surrogate pair 처리 (U+10000 이상 문자)
+
+2. **`GraphicsDevice_DX12.cpp`** - 호출부 수정
+   ```cpp
+   // 변경 전 - 버퍼 오버플로우 위험
+   vz::helper::StringConvert(name, text)
+
+   // 변경 후 - 크기 명시
+   vz::helper::StringConvert(name, text, arraysize(text))
+   ```
+   - `EventBegin()` (line 7996)
+   - `SetMarker()` (line 8014)
+
+**수정 효과**:
+- 버퍼 오버플로우 취약점 제거
+- Dangling pointer UB 버그 수정
+- C++17 deprecated API 제거
+- 크로스 플랫폼 결정론적 동작 보장
 
 ---
 
@@ -1787,6 +1810,15 @@ struct PSO_STREAM1 {
 
 **VizMotive**: `PSO_STREAM1`에 `Flags` 필드 없음 → Win11 dynamic depth bias 사용시 필요
 
+#### VizMotive 스킵 ⏭️
+
+**분석 일자**: 2026-01-27
+
+**이유**:
+- PSO_STREAM1::Flags는 Win10에서 미작동 (주석 처리됨)
+- 셰이더 bias 튜닝값은 프로젝트별 조정 필요
+- slope_scaled_depth_bias 값 변경은 그림자 품질 튜닝
+
 ---
 
 ### #15. `a44d321b` - removal of libraries
@@ -1794,7 +1826,14 @@ struct PSO_STREAM1 {
 
 **DX12 변경**: `dxva.h` 경로 변경 (Utility → 시스템 헤더)
 
-**VizMotive**: 해당 없음 (비디오 관련)
+#### VizMotive 해당 없음 ⏭️
+
+**분석 일자**: 2026-01-27
+
+**이유**:
+- WickedEngine이 `e9f8647f`에서 다시 로컬 dxva.h 복원
+- VizMotive는 이미 로컬 `ThirdParty/dxva.h` 사용 (올바른 접근)
+- basis universal/qoi 라이브러리 제거는 VizMotive 구조와 무관
 
 ---
 
@@ -1812,13 +1851,35 @@ std::shared_ptr<void> rootsig_desc_lifetime_extender;
 internal_state->rootsig_desc_lifetime_extender = pso->desc.vs->internal_state;
 ```
 
-**VizMotive**: `rootsig_desc_lifetime_extender` 없음 → **잠재적 크래시 버그**
-- 쉐이더 리로드/삭제 시나리오에서 문제 발생 가능
-- **적용 권장**: 높음
+#### VizMotive 적용 완료 ✅
+
+**적용 일자**: 2026-01-27
+
+**적용 내용** (`GraphicsDevice_DX12.cpp`):
+
+1. **PSO internal_state에 필드 추가** (line 1431):
+   ```cpp
+   std::shared_ptr<void> rootsig_desc_lifetime_extender;
+   ```
+
+2. **각 셰이더 타입별 lifetime extender 설정**:
+   | 셰이더 | 라인 |
+   |--------|------|
+   | VS | 4109 |
+   | HS | 4121 |
+   | DS | 4133 |
+   | GS | 4145 |
+   | PS | 4157 |
+   | MS | 4170 |
+   | AS | 4182 |
+
+**수정 효과**:
+- 셰이더가 PSO보다 먼저 해제되어도 rootsig_desc 유효
+- 셰이더 리로드/핫리로드 시 크래시 방지
 
 ---
 
-### #17. `6c973af6` - block compressed texture saving fix
+### #17. `6c973af6` - block compressed texture saving fix ✅ 적용 완료
 **날짜**: 2025-06-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
 **문제**: BC 텍스처 크기가 블록 크기의 배수가 아닐 때 블록 수 계산 오류
@@ -1831,10 +1892,10 @@ const uint32_t num_blocks_x = desc.width / pixels_per_block;
 const uint32_t num_blocks_x = (mip_width + pixels_per_block - 1) / pixels_per_block;
 ```
 
-**VizMotive**: 동일한 버그 존재
-- `GBackend.h:1876`: `num_blocks_x = desc.width / pixels_per_block`
-- `Helpers2.cpp:120`: 같은 문제
-- **적용 권장**: 중간 (비정렬 BC 텍스처 저장시 데이터 손실)
+**VizMotive 적용**: `GBackend.h` - `ComputeTextureMemorySizeInBytes()` 수정
+- 각 mip 레벨에서 `mip_width`, `mip_height` 먼저 계산
+- ceiling division으로 블록 수 계산: `(mip_width + pixels_per_block - 1) / pixels_per_block`
+- 기존 코드는 mip 0에서만 블록 수 계산 후 shift → 잘못된 방식
 
 ---
 
@@ -1882,34 +1943,48 @@ case 'w': case 'W': *comp = ComponentSwizzle::A; break;
 |---|------|------|----------------|
 | 3 | `93ebdaa6` | CPU/GPU 펜스 분리 | 단일 펜스 → Race condition |
 | 4 | `dc532889` | 버퍼 초기화 | Indirect 버퍼 미초기화 |
-| 16 | `df69a706` | Root signature 수명 | dangling pointer → 크래시 |
+| ~~16~~ | ~~`df69a706`~~ | ~~Root signature 수명~~ | ✅ **적용 완료** |
 | 2 | `3f5a5cc6` | 펜스 명명, 큐 동기화 | 디버깅 어려움 |
 
 ### 중간 (성능/기능) - 필요시 적용
 | # | 커밋 | 내용 | VizMotive 문제 |
 |---|------|------|----------------|
-| 13 | `e6a003cd` | StringConvert 리팩토링 | deprecated API + UB 버그 + 버퍼 오버플로우 |
-| 17 | `6c973af6` | BC 텍스처 블록 계산 | ceiling division 누락 → 데이터 손실 |
-| 11 | `8582ea3d` | PSO 캐싱 개선 | early exit시 active_pso 미설정 |
+| ~~13~~ | ~~`e6a003cd`~~ | ~~StringConvert 리팩토링~~ | ✅ **적용 완료** |
+| ~~17~~ | ~~`6c973af6`~~ | ~~BC 텍스처 블록 계산~~ | ✅ **적용 완료** |
+| ~~11~~ | ~~`8582ea3d`~~ | ~~PSO 캐싱 개선~~ | ✅ **적용 완료** |
 | 7 | `99c82676` | StencilRef 캐싱 | 불필요한 API 호출 |
 | 6 | `4f503da8` | SWAPCHAIN ResourceState | 상태 명시성 부족 |
-| 10 | `30917c9e` | GPU 버퍼 서브할당자 | 버퍼 전환 오버헤드 |
+| ~~10~~ | ~~`30917c9e`~~ | ~~GPU 버퍼 서브할당자~~ | ✅ **적용 완료** |
 
 ### 낮음 - 선택적 적용
 | # | 커밋 | 내용 |
 |---|------|------|
 | 1 | `bf27a9fb` | WaitQueue 제거 |
-| 5, 12 | `652fe0da`, `a948117e` | 헬퍼 함수들 |
+| 5 | `652fe0da` | 헬퍼 함수 (crossfade) |
+| ~~12~~ | ~~`a948117e`~~ | ~~CreateMipgenSubresources 헬퍼~~ | ⏭️ **해당 없음** (이미 인라인 구현) |
+| ~~14~~ | ~~`96f267e1`~~ | ~~shadow bias 튜닝~~ | ⏭️ **스킵** (Win10 미작동, 튜닝값) |
+| ~~15~~ | ~~`a44d321b`~~ | ~~dxva.h 경로 변경~~ | ⏭️ **해당 없음** (WickedEngine 복원됨) |
 | 8 | `b1b708d2` | DISABLE_RENDERPASS |
 | 9 | `fe3b922f` | dx12_check 에러 체크 |
-| 14-15, 18-19 | 기타 | PSO Flags/빌드/스위즐 |
+| 18-19 | 기타 | 빌드/스위즐 |
 
 ---
 
 ## 다음 단계
 
-1. **#16 적용**: `rootsig_desc_lifetime_extender` 추가 (크래시 방지)
-2. **#3, #4 적용**: 펜스 분리 + 버퍼 초기화
-3. **#17 적용**: BC 텍스처 ceiling division 수정
-4. **#11 적용**: PSO early exit 시 `active_pso` 설정
-5. 성능 이슈 발생시 #10 버퍼 서브할당자 검토
+(모든 DX12 관련 커밋 적용 완료)
+
+### 적용 완료 커밋 (11개)
+| # | 커밋 | 내용 | 적용일 |
+|---|------|------|--------|
+| 1 | `bf27a9fb` | WaitQueue 제거 | 2025-01-26 |
+| 2 | `3f5a5cc6` | DX12/Vulkan 안정성 | 2025-01-26 |
+| 3 | `93ebdaa6` | CPU/GPU 펜스 분리 | 2025-01-26 |
+| 4 | `dc532889` | Xbox GPU hang fix | 2025-01-26 |
+| 6 | `4f503da8` | HDR improvements | 2025-01-26 |
+| 7 | `99c82676` | DX12/Vulkan improvements | 2025-01-26 |
+| 10 | `30917c9e` | GPU buffer suballocator | 2026-01-27 |
+| 11 | `8582ea3d` | PSO 캐싱 개선 (Terrain determinism) | 2026-01-27 |
+| 13 | `e6a003cd` | StringConvert 리팩토링 | 2026-01-27 |
+| 16 | `df69a706` | Root signature 수명 연장 | 2026-01-27 |
+| 17 | `6c973af6` | BC 텍스처 블록 계산 | 2026-01-27 |
