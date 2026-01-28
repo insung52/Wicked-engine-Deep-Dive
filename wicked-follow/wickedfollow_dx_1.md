@@ -47,11 +47,11 @@
 
 ---
 
-## 상세 분석 (시간순)
+# 상세 분석 (시간순)
 
 ---
 
-### #1. `bf27a9fb` - Linux hang fix ✅ 적용 완료
+## #1. `bf27a9fb` - Linux hang fix ✅ 적용 완료
 **날짜**: 2025-03-12 | **카테고리**: 안정성 | **우선순위**: 중간
 
 **문제**: `WaitQueue()`가 Linux에서 행(hang) 유발
@@ -126,7 +126,7 @@ void GraphicsDevice_DX12::WaitQueue(CommandList cmd, QUEUE_TYPE wait_for)
 
 ---
 
-### #2. `3f5a5cc6` - dx12 and vulkan additional safety updates ✅ 적용 완료
+## #2. `3f5a5cc6` - dx12 and vulkan additional safety updates ✅ 적용 완료
 **날짜**: 2025-03-15 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -397,7 +397,7 @@ for (int q = 0; q < QUEUE_COUNT; ++q)
 
 ---
 
-### #3. `93ebdaa6` - dx12 separated cpu and gpu fences ✅ 적용 완료
+## #3. `93ebdaa6` - dx12 separated cpu and gpu fences ✅ 적용 완료
 **날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -652,7 +652,7 @@ dx12_check(fence->Signal(0));  // Wait 후 Signal(0)으로 in-use 마킹
 
 ---
 
-### #4. `dc532889` - xbox gpu hang fix ✅ 적용 완료
+## #4. `dc532889` - xbox gpu hang fix ✅ 적용 완료
 **날짜**: 2025-03-16 | **카테고리**: 안정성 | **우선순위**: 높음
 
 #### 변경 개요
@@ -876,7 +876,7 @@ bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
 
 ---
 
-### #5. `652fe0da` - added crossfade fade type
+## #5. `652fe0da` - added crossfade fade type
 **날짜**: 2025-03-19 | **카테고리**: 기능 | **우선순위**: 낮음
 
 #### 변경 개요
@@ -1034,7 +1034,7 @@ VizMotive에서는:
 
 ---
 
-### #6. `4f503da8` - HDR improvements ✅ 적용 완료
+## #6. `4f503da8` - HDR improvements ✅ 적용 완료
 **날짜**: 2025-03-21 | **카테고리**: 기능 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1287,7 +1287,7 @@ SWAPCHAIN 상태 추가 시:
 
 ---
 
-### #7. `99c82676` - dx12 and vulkan improvements ✅ 적용 완료
+## #7. `99c82676` - dx12 and vulkan improvements ✅ 적용 완료
 **날짜**: 2025-03-25 | **카테고리**: 개선 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1576,7 +1576,7 @@ freelist.push_back(cmd); // Add after completion
 
 ---
 
-### #8. `b1b708d2` - camera render texture can be set to material
+## #8. `b1b708d2` - camera render texture can be set to material
 **날짜**: 2025-03-26 | **카테고리**: 기능 | **우선순위**: 중간
 
 **DX12 변경**:
@@ -1596,7 +1596,7 @@ Xbox에서 RenderPass API 비활성화 옵션 추가.
 
 ---
 
-### #9. `fe3b922f` - Terrain spline material
+## #9. `fe3b922f` - Terrain spline material
 **날짜**: 2025-04-25 | **카테고리**: 버그수정 | **우선순위**: 낮음
 
 **커밋 내용**: 터레인 스플라인 머티리얼 기능 + GUI 개선 (31개 파일, +226/-362줄)
@@ -1616,7 +1616,7 @@ dx12_check(cmd.fence->Signal(0));
 
 ---
 
-### #10. `30917c9e` - GPU buffer suballocator ✅ 적용 완료
+## #10. `30917c9e` - GPU buffer suballocator ✅ 적용 완료
 **날짜**: 2025-04-28 | **카테고리**: 성능 | **우선순위**: 중간
 
 #### 변경 개요
@@ -1663,7 +1663,7 @@ dx12_check(cmd.fence->Signal(0));
 
 ---
 
-### #11. `8582ea3d` - Terrain determinism fixes ✅ 적용 완료
+## #11. `8582ea3d` - Terrain determinism fixes ✅ 적용 완료
 **날짜**: 2025-04-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
 **DX12 변경**: PSO 바인딩 최적화
@@ -1710,7 +1710,7 @@ if (commandlist.prev_pipeline_hash == pipeline_hash) {
 
 ---
 
-### #12. `a948117e` - textured rectangle lights
+## #12. `a948117e` - textured rectangle lights
 **날짜**: 2025-05-18 | **카테고리**: 기능 | **우선순위**: 낮음
 
 **DX12 변경**: `wiGraphicsDevice.h`에 헬퍼 추가
@@ -1739,7 +1739,7 @@ void CreateMipgenSubresources(Texture& texture);
 
 ---
 
-### #13. `e6a003cd` - stringconvert replacement ✅ 적용 완료
+## #13. `e6a003cd` - stringconvert replacement ✅ 적용 완료
 **날짜**: 2025-05-20 | **카테고리**: 리팩토링/안정성 | **우선순위**: 중간
 
 **변경 내용**:
@@ -1797,7 +1797,7 @@ int StringConvert(const wchar_t* from, char* to, int dest_size);
 
 ---
 
-### #14. `96f267e1` - improved shadow bias
+## #14. `96f267e1` - improved shadow bias
 **날짜**: 2025-05-24 | **카테고리**: 렌더링 | **우선순위**: 낮음
 
 **DX12 변경**: PSO 스트림에 Flags 필드 추가
@@ -1821,7 +1821,7 @@ struct PSO_STREAM1 {
 
 ---
 
-### #15. `a44d321b` - removal of libraries
+## #15. `a44d321b` - removal of libraries
 **날짜**: 2025-06-03 | **카테고리**: 리팩토링 | **우선순위**: 낮음
 
 **DX12 변경**: `dxva.h` 경로 변경 (Utility → 시스템 헤더)
@@ -1837,7 +1837,7 @@ struct PSO_STREAM1 {
 
 ---
 
-### #16. `df69a706` - dx12 root signature desc life extender ✅ 적용 완료
+## #16. `df69a706` - dx12 root signature desc life extender ✅ 적용 완료
 **날짜**: 2025-06-14 | **카테고리**: 안정성 | **우선순위**: 높음
 
 **문제**: PSO가 rootsig_desc 포인터를 쉐이더에서 복사 → 쉐이더 먼저 삭제시 dangling pointer
@@ -1879,7 +1879,7 @@ internal_state->rootsig_desc_lifetime_extender = pso->desc.vs->internal_state;
 
 ---
 
-### #17. `6c973af6` - block compressed texture saving fix ✅ 적용 완료
+## #17. `6c973af6` - block compressed texture saving fix ✅ 적용 완료
 **날짜**: 2025-06-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
 **문제**: BC 텍스처 크기가 블록 크기의 배수가 아닐 때 블록 수 계산 오류
@@ -1899,7 +1899,7 @@ const uint32_t num_blocks_x = (mip_width + pixels_per_block - 1) / pixels_per_bl
 
 ---
 
-### #18. `6cc52406` - prevent clang warning
+## #18. `6cc52406` - prevent clang warning
 **날짜**: 2025-07-13 | **카테고리**: 빌드/보안 | **우선순위**: 낮음
 
 **문제**: 포맷 문자열 취약점 (Format String Vulnerability)
@@ -1917,7 +1917,7 @@ wilog_messagebox("%s", error.c_str());
 
 ---
 
-### #19. `e9d5cd09` - texture swizzle improvement
+## #19. `e9d5cd09` - texture swizzle improvement
 **날짜**: 2025-08-15 | **카테고리**: 기능 | **우선순위**: 낮음
 
 **변경**: 스위즐 파싱에서 xyzw 표기법도 인식
@@ -1983,7 +1983,7 @@ case 'w': case 'W': *comp = ComponentSwizzle::A; break;
 | 4 | `dc532889` | Xbox GPU hang fix | 2025-01-26 |
 | 6 | `4f503da8` | HDR improvements | 2025-01-26 |
 | 7 | `99c82676` | DX12/Vulkan improvements | 2025-01-26 |
-| 10 | `30917c9e` | GPU buffer suballocator | 2026-01-27 |
+| 10 | `30917c9e` | GPU buffer suballocator | 2026-01-28 |
 | 11 | `8582ea3d` | PSO 캐싱 개선 (Terrain determinism) | 2026-01-27 |
 | 13 | `e6a003cd` | StringConvert 리팩토링 | 2026-01-27 |
 | 16 | `df69a706` | Root signature 수명 연장 | 2026-01-27 |
