@@ -1639,7 +1639,7 @@ dx12_check(cmd.fence->Signal(0));
 - 단일 256MB 블록 버퍼 + 오프셋 기반 SRV/UAV 뷰
 - Debug Layer 경고 없이 동작 (경고 필터링 불필요)
 
-**상세 구현 문서**: [GPU Buffer Suballocation Without Debug Layer Warnings](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/suballocation_withoutWarning.md)
+#### **상세 구현 문서**: [GPU Buffer Suballocation Without Debug Layer Warnings](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/suballocation_withoutWarning.md)
 
 #### 핵심 변경 요약
 
