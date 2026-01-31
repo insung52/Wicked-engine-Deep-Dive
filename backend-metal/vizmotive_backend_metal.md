@@ -1,23 +1,435 @@
 # VizMotive Engine - Metal Graphics Backend 구현 가이드
 
 ## 목차
-1. [그래픽스 백엔드란?](#1-그래픽스-백엔드란)
-2. [VizMotive 엔진의 백엔드 아키텍처](#2-vizmotive-엔진의-백엔드-아키텍처)
-3. [Metal 백엔드 파일 구조](#3-metal-백엔드-파일-구조)
-4. [플러그인 인터페이스](#4-플러그인-인터페이스)
-5. [GraphicsDevice 인터페이스](#5-graphicsdevice-인터페이스)
-6. [포맷 변환 시스템](#6-포맷-변환-시스템)
-7. [리소스 생성 구현](#7-리소스-생성-구현)
-8. [렌더링 파이프라인](#8-렌더링-파이프라인)
-9. [커맨드 리스트와 프레임 동기화](#9-커맨드-리스트와-프레임-동기화)
-10. [Metal Triangle 샘플](#10-metal-triangle-샘플)
-11. [현재 구현 상태](#11-현재-구현-상태)
-12. [빌드 방법](#12-빌드-방법)
-13. [다음 단계](#13-다음-단계)
+1. [전체 실행 흐름 (Big Picture)](#1-전체-실행-흐름-big-picture) ⭐ **먼저 읽으세요!**
+2. [그래픽스 백엔드란?](#2-그래픽스-백엔드란)
+3. [VizMotive 엔진의 백엔드 아키텍처](#3-vizmotive-엔진의-백엔드-아키텍처)
+4. [Metal 백엔드 파일 구조](#4-metal-백엔드-파일-구조)
+5. [플러그인 인터페이스](#5-플러그인-인터페이스)
+6. [GraphicsDevice 인터페이스](#6-graphicsdevice-인터페이스)
+7. [포맷 변환 시스템](#7-포맷-변환-시스템)
+8. [리소스 생성 구현](#8-리소스-생성-구현)
+9. [렌더링 파이프라인](#9-렌더링-파이프라인)
+10. [커맨드 리스트와 프레임 동기화](#10-커맨드-리스트와-프레임-동기화)
+11. [Metal Triangle 샘플](#11-metal-triangle-샘플)
+12. [현재 구현 상태](#12-현재-구현-상태)
+13. [빌드 방법](#13-빌드-방법)
+14. [다음 단계](#14-다음-단계)
 
 ---
 
-## 1. 그래픽스 백엔드란?
+## 1. 전체 실행 흐름 (Big Picture)
+
+### 1.1 프로그램 생명주기 개요
+
+C 언어의 `main()` 함수처럼, 그래픽스 애플리케이션도 명확한 실행 순서가 있습니다:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        프로그램 생명주기                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────┐                                                    │
+│  │   1. 시작       │  main() 진입                                        │
+│  │   (Startup)     │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │   2. 초기화     │  GraphicsDevice 생성, SwapChain 생성                │
+│  │   (Initialize)  │  한 번만 실행                                       │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │   3. 리소스     │  Buffer, Texture, Shader, Pipeline 생성            │
+│  │   (Resources)   │  한 번만 실행 (또는 필요시 동적 생성)                 │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │   4. 렌더 루프  │◀─────┐  매 프레임 반복 (60fps = 초당 60번)          │
+│  │   (Render Loop) │      │                                             │
+│  └────────┬────────┘      │                                             │
+│           │               │                                             │
+│           └───────────────┘  (윈도우 닫기 전까지 계속)                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │   5. 정리       │  리소스 해제, GraphicsDevice 소멸                    │
+│  │   (Cleanup)     │  한 번만 실행                                       │
+│  └─────────────────┘                                                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 시간순 전체 흐름 (상세)
+
+아래는 프로그램 시작부터 종료까지 호출되는 함수들을 **시간순**으로 나열한 것입니다:
+
+```
+═══════════════════════════════════════════════════════════════════════════
+                              시간 →
+═══════════════════════════════════════════════════════════════════════════
+
+[1. 프로그램 시작] ─────────────────────────────────────────────────────────
+
+    main()
+      │
+      ├─► 윈도우 생성 (NSWindow / HWND)
+      │
+      └─► GraphicsDevice 초기화
+            │
+            ├─► device->Initialize()
+            │     • MTLCreateSystemDefaultDevice()     // GPU 획득
+            │     • [device newCommandQueue]           // 커맨드 큐 생성
+            │     • dispatch_semaphore_create()        // 동기화 준비
+            │
+            └─► device->CreateSwapChain()
+                  • CAMetalLayer 생성                  // 화면 출력용 레이어
+                  • 윈도우에 연결
+
+[2. 리소스 생성 (한 번만)] ─────────────────────────────────────────────────
+
+    // 렌더링에 필요한 모든 리소스를 미리 생성
+
+    device->CreateBuffer()       ──► 버텍스/인덱스 데이터 업로드
+    device->CreateTexture()      ──► 이미지 데이터 업로드
+    device->CreateShader()       ──► 셰이더 컴파일
+    device->CreateSampler()      ──► 텍스처 샘플링 설정
+    device->CreatePipelineState() ──► 렌더링 파이프라인 조립
+
+[3. 렌더 루프 (매 프레임 반복)] ────────────────────────────────────────────
+
+    while (running)  // 보통 60fps로 실행
+    {
+        ┌─────────────────────────────────────────────────────────────┐
+        │ Frame N                                                      │
+        │                                                              │
+        │  // 3-1. 커맨드 기록 시작                                     │
+        │  cmd = device->BeginCommandList()                            │
+        │                                                              │
+        │  // 3-2. 렌더패스 시작 (렌더 타겟 설정)                         │
+        │  device->RenderPassBegin(&swapChain, cmd)                    │
+        │    └─► 화면 클리어, drawable 획득                              │
+        │                                                              │
+        │  // 3-3. 상태 바인딩 (무엇으로 그릴지 설정)                      │
+        │  device->BindViewports(...)         // 뷰포트 설정            │
+        │  device->BindScissorRects(...)      // 시저 설정              │
+        │  device->BindPipelineState(...)     // 셰이더+상태 바인딩      │
+        │  device->BindVertexBuffers(...)     // 버텍스 데이터 바인딩    │
+        │  device->BindIndexBuffer(...)       // 인덱스 데이터 바인딩    │
+        │  device->BindConstantBuffer(...)    // 상수 버퍼 바인딩        │
+        │  device->BindResource(texture, ...) // 텍스처 바인딩          │
+        │  device->BindSampler(...)           // 샘플러 바인딩          │
+        │                                                              │
+        │  // 3-4. Draw 명령 (GPU야, 그려라!)                           │
+        │  device->Draw(vertexCount, ...)     // 또는                  │
+        │  device->DrawIndexed(indexCount, ...)                        │
+        │                                                              │
+        │  // 3-5. 렌더패스 종료                                        │
+        │  device->RenderPassEnd(cmd)                                  │
+        │                                                              │
+        │  // 3-6. GPU에 제출 + 화면 표시                                │
+        │  device->SubmitCommandLists()                                │
+        │    └─► [commandBuffer commit]                                │
+        │    └─► [commandBuffer presentDrawable]                       │
+        │                                                              │
+        └─────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+        ┌─────────────────────────────────────────────────────────────┐
+        │ Frame N+1  (반복...)                                         │
+        └─────────────────────────────────────────────────────────────┘
+    }
+
+[4. 프로그램 종료] ─────────────────────────────────────────────────────────
+
+    device->WaitForGPU()    // GPU 작업 완료 대기
+
+    // 리소스 자동 해제 (ARC / 소멸자)
+    delete device           // GraphicsDevice 소멸
+
+    // 윈도우 닫기
+
+═══════════════════════════════════════════════════════════════════════════
+```
+
+### 1.3 렌더 루프 한 프레임 상세
+
+렌더 루프의 **한 프레임**을 더 자세히 살펴보면:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         한 프레임의 렌더링 과정                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   CPU 측 (앱 코드)                      GPU 측 (하드웨어)                 │
+│   ──────────────────                   ──────────────────               │
+│                                                                         │
+│   ① BeginCommandList()                                                  │
+│      └─► 빈 커맨드 버퍼 생성            (대기 중...)                      │
+│                                                                         │
+│   ② RenderPassBegin()                                                   │
+│      └─► 렌더 타겟 설정                                                  │
+│      └─► 렌더 인코더 생성                                                │
+│                                                                         │
+│   ③ BindPipelineState()                                                 │
+│      └─► 어떤 셰이더 사용할지          명령                              │
+│                                        기록                              │
+│   ④ BindVertexBuffers()                 중                              │
+│      └─► 어떤 데이터 그릴지            ─┬─                              │
+│                                         │                               │
+│   ⑤ Draw(3, 0)                          │                               │
+│      └─► "삼각형 그려라" 명령           │                               │
+│                                         │                               │
+│   ⑥ RenderPassEnd()                     │                               │
+│      └─► 인코더 종료                   ─┘                               │
+│                                                                         │
+│   ⑦ SubmitCommandLists()               ─────────────────────►          │
+│      └─► GPU에 커맨드 전송                    GPU가 명령 실행            │
+│      └─► Present 요청                        ┌──────────────┐           │
+│                                              │ 버텍스 처리   │           │
+│   (CPU는 다음 프레임 준비 가능)               │ 래스터화     │           │
+│                                              │ 프래그먼트    │           │
+│                                              │ 화면 출력     │           │
+│                                              └──────────────┘           │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.4 코드로 보는 전체 흐름
+
+실제 코드에서 위 흐름이 어떻게 구현되는지 보겠습니다:
+
+```cpp
+// ═══════════════════════════════════════════════════════════════════════
+// main.mm - 프로그램 진입점
+// ═══════════════════════════════════════════════════════════════════════
+
+int main()
+{
+    // ═══════════════════════════════════════════════════════════════════
+    // [1단계] 초기화 - 프로그램 시작 시 한 번만 실행
+    // ═══════════════════════════════════════════════════════════════════
+
+    // 1-1. 윈도우 생성
+    Window* window = CreateWindow(800, 600, "My App");
+
+    // 1-2. Graphics Device 생성 및 초기화
+    GraphicsDevice_Metal* device = new GraphicsDevice_Metal();
+    device->Initialize(ValidationMode::Disabled, GPUPreference::Discrete);
+    //                 ↑ 디버그 검증 비활성화        ↑ 외장 GPU 선호
+
+    // 1-3. SwapChain 생성 (화면 출력용)
+    SwapChainDesc swapDesc = {};
+    swapDesc.width = 800;
+    swapDesc.height = 600;
+    swapDesc.format = Format::B8G8R8A8_UNORM;  // 픽셀 포맷
+    swapDesc.buffer_count = 2;                  // 더블 버퍼링
+    swapDesc.vsync = true;                      // 수직 동기화
+    swapDesc.clear_color[0] = 0.2f;             // 클리어 색상 (R)
+    swapDesc.clear_color[1] = 0.2f;             // (G)
+    swapDesc.clear_color[2] = 0.3f;             // (B)
+    swapDesc.clear_color[3] = 1.0f;             // (A)
+
+    SwapChain swapChain;
+    device->CreateSwapChain(&swapDesc, window, &swapChain);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // [2단계] 리소스 생성 - 렌더링에 필요한 데이터 준비 (한 번만)
+    // ═══════════════════════════════════════════════════════════════════
+
+    // 2-1. 버텍스 데이터 정의
+    Vertex vertices[] = {
+        { {  0.0f,  0.5f }, { 1.0f, 0.0f, 0.0f } },  // 상단 (빨강)
+        { { -0.5f, -0.5f }, { 0.0f, 1.0f, 0.0f } },  // 좌하단 (녹색)
+        { {  0.5f, -0.5f }, { 0.0f, 0.0f, 1.0f } },  // 우하단 (파랑)
+    };
+
+    // 2-2. 버텍스 버퍼 생성
+    GPUBufferDesc bufferDesc = {};
+    bufferDesc.size = sizeof(vertices);
+    bufferDesc.usage = Usage::UPLOAD;           // CPU에서 쓰기 가능
+    bufferDesc.bind_flags = BindFlag::VERTEX_BUFFER;
+
+    GPUBuffer vertexBuffer;
+    device->CreateBuffer(&bufferDesc, vertices, &vertexBuffer);
+
+    // 2-3. 셰이더 생성 (컴파일)
+    Shader vertexShader, pixelShader;
+    device->CreateShader(ShaderStage::VS, shaderSource, strlen(shaderSource), &vertexShader);
+    device->CreateShader(ShaderStage::PS, shaderSource, strlen(shaderSource), &pixelShader);
+
+    // 2-4. 입력 레이아웃 정의 (버텍스 구조 설명)
+    InputLayout inputLayout;
+    inputLayout.elements = {
+        { "POSITION", 0, Format::R32G32_FLOAT,   0, offsetof(Vertex, position) },
+        { "COLOR",    0, Format::R32G32B32_FLOAT, 0, offsetof(Vertex, color) },
+    };
+
+    // 2-5. 파이프라인 상태 생성 (모든 렌더링 설정 조합)
+    RenderPassInfo passInfo = {};
+    passInfo.rt_count = 1;
+    passInfo.rt_formats[0] = Format::B8G8R8A8_UNORM;
+
+    PipelineStateDesc psoDesc = {};
+    psoDesc.vs = &vertexShader;          // 버텍스 셰이더
+    psoDesc.ps = &pixelShader;           // 픽셀 셰이더
+    psoDesc.il = &inputLayout;           // 입력 레이아웃
+    psoDesc.pt = PrimitiveTopology::TRIANGLELIST;  // 삼각형 리스트
+
+    PipelineState pipelineState;
+    device->CreatePipelineState(&psoDesc, &pipelineState, &passInfo);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // [3단계] 렌더 루프 - 매 프레임 반복 (60fps)
+    // ═══════════════════════════════════════════════════════════════════
+
+    while (window->IsOpen())  // 윈도우가 열려있는 동안 반복
+    {
+        // ─────────────────────────────────────────────────────────────
+        // 3-1. 커맨드 리스트 시작
+        // ─────────────────────────────────────────────────────────────
+        CommandList cmd = device->BeginCommandList(QUEUE_GRAPHICS);
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-2. 렌더패스 시작 (렌더 타겟 = SwapChain 백버퍼)
+        // ─────────────────────────────────────────────────────────────
+        device->RenderPassBegin(&swapChain, cmd);
+        // → 내부적으로: 화면 클리어 + drawable 획득
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-3. 뷰포트 & 시저 설정
+        // ─────────────────────────────────────────────────────────────
+        Viewport viewport = { 0, 0, 800, 600, 0.0f, 1.0f };
+        device->BindViewports(1, &viewport, cmd);
+
+        Rect scissor = { 0, 0, 800, 600 };
+        device->BindScissorRects(1, &scissor, cmd);
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-4. 파이프라인 바인딩 (어떤 셰이더/설정으로 그릴지)
+        // ─────────────────────────────────────────────────────────────
+        device->BindPipelineState(&pipelineState, cmd);
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-5. 버텍스 버퍼 바인딩 (어떤 데이터를 그릴지)
+        // ─────────────────────────────────────────────────────────────
+        const GPUBuffer* vbs[] = { &vertexBuffer };
+        uint32_t strides[] = { sizeof(Vertex) };
+        uint64_t offsets[] = { 0 };
+        device->BindVertexBuffers(vbs, 0, 1, strides, offsets, cmd);
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-6. Draw 명령 (GPU야, 그려라!)
+        // ─────────────────────────────────────────────────────────────
+        device->Draw(3, 0, cmd);  // 3개의 버텍스, 0번부터 시작
+        //           ↑     ↑
+        //      버텍스 수  시작 위치
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-7. 렌더패스 종료
+        // ─────────────────────────────────────────────────────────────
+        device->RenderPassEnd(cmd);
+
+        // ─────────────────────────────────────────────────────────────
+        // 3-8. GPU에 제출 + 화면에 표시
+        // ─────────────────────────────────────────────────────────────
+        device->SubmitCommandLists();
+        // → 내부적으로: commit + presentDrawable + 세마포어 동기화
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // [4단계] 정리 - 프로그램 종료 시 한 번만 실행
+    // ═══════════════════════════════════════════════════════════════════
+
+    device->WaitForGPU();  // GPU 작업 완료 대기
+    delete device;         // 디바이스 소멸 (리소스 자동 해제)
+
+    return 0;
+}
+```
+
+### 1.5 함수 호출 횟수 요약
+
+| 함수 | 호출 시점 | 호출 횟수 |
+|------|----------|----------|
+| `Initialize()` | 프로그램 시작 | **1번** |
+| `CreateSwapChain()` | 프로그램 시작 | **1번** |
+| `CreateBuffer()` | 리소스 생성 | **1번** (동적 생성 제외) |
+| `CreateTexture()` | 리소스 생성 | **1번** (동적 생성 제외) |
+| `CreateShader()` | 리소스 생성 | **1번** |
+| `CreatePipelineState()` | 리소스 생성 | **1번** |
+| `BeginCommandList()` | 렌더 루프 | **매 프레임** |
+| `RenderPassBegin()` | 렌더 루프 | **매 프레임** (여러 패스 가능) |
+| `BindPipelineState()` | 렌더 루프 | **매 프레임** (여러 번 가능) |
+| `BindVertexBuffers()` | 렌더 루프 | **매 프레임** (여러 번 가능) |
+| `Draw()` / `DrawIndexed()` | 렌더 루프 | **매 프레임** (여러 번) |
+| `RenderPassEnd()` | 렌더 루프 | **매 프레임** |
+| `SubmitCommandLists()` | 렌더 루프 | **매 프레임** |
+| `WaitForGPU()` | 프로그램 종료 | **1번** |
+
+### 1.6 왜 이런 순서인가?
+
+```
+Q: 왜 리소스를 먼저 만들어야 하나요?
+A: GPU는 데이터(버텍스, 텍스처)가 GPU 메모리에 있어야 사용할 수 있습니다.
+   매 프레임마다 업로드하면 너무 느리므로, 미리 한 번 만들어 둡니다.
+
+Q: 왜 파이프라인을 미리 만들어야 하나요?
+A: 파이프라인 생성은 비용이 큽니다 (셰이더 컴파일 포함).
+   렌더 루프에서는 이미 만들어진 파이프라인을 "바인딩"만 합니다.
+
+Q: 왜 BeginCommandList → ... → Submit 순서인가요?
+A: GPU는 명령들을 배치(batch)로 받아서 실행합니다.
+   Begin에서 시작, 중간에 명령 기록, Submit에서 GPU로 전송합니다.
+
+Q: 왜 RenderPassBegin/End로 감싸야 하나요?
+A: 렌더 타겟(어디에 그릴지)을 명확히 해야 GPU가 알 수 있습니다.
+   한 패스 내에서만 해당 렌더 타겟에 그릴 수 있습니다.
+```
+
+### 1.7 여러 오브젝트 그리기
+
+실제 게임에서는 한 프레임에 여러 오브젝트를 그립니다:
+
+```cpp
+while (running)
+{
+    CommandList cmd = device->BeginCommandList(QUEUE_GRAPHICS);
+    device->RenderPassBegin(&swapChain, cmd);
+
+    // 뷰포트, 시저 설정 (한 번)
+    device->BindViewports(1, &viewport, cmd);
+    device->BindScissorRects(1, &scissor, cmd);
+
+    // ─────────── 오브젝트 1: 캐릭터 ───────────
+    device->BindPipelineState(&characterPipeline, cmd);
+    device->BindVertexBuffers(&characterMesh, ...);
+    device->BindResource(&characterTexture, 0, cmd);
+    device->DrawIndexed(characterIndexCount, 0, 0, cmd);
+
+    // ─────────── 오브젝트 2: 배경 ───────────
+    device->BindPipelineState(&backgroundPipeline, cmd);
+    device->BindVertexBuffers(&backgroundMesh, ...);
+    device->BindResource(&backgroundTexture, 0, cmd);
+    device->DrawIndexed(backgroundIndexCount, 0, 0, cmd);
+
+    // ─────────── 오브젝트 3: UI ───────────
+    device->BindPipelineState(&uiPipeline, cmd);
+    device->BindVertexBuffers(&uiQuad, ...);
+    device->BindResource(&uiTexture, 0, cmd);
+    device->Draw(6, 0, cmd);  // UI 쿼드
+
+    device->RenderPassEnd(cmd);
+    device->SubmitCommandLists();
+}
+```
+
+---
+
+## 2. 그래픽스 백엔드란?
 
 ### 개념
 **그래픽스 백엔드**는 게임 엔진과 GPU 사이의 **추상화 계층**입니다.
@@ -51,7 +463,7 @@
 
 ---
 
-## 2. VizMotive 엔진의 백엔드 아키텍처
+## 3. VizMotive 엔진의 백엔드 아키텍처
 
 ### 플러그인 방식
 VizMotive는 그래픽스 백엔드를 **동적 라이브러리(DLL/dylib)**로 분리합니다.
@@ -90,7 +502,7 @@ struct GBackendLoader {
 
 ---
 
-## 3. Metal 백엔드 파일 구조
+## 4. Metal 백엔드 파일 구조
 
 ```
 GraphicsBackends/
@@ -127,7 +539,7 @@ Examples/
 
 ---
 
-## 4. 플러그인 인터페이스
+## 5. 플러그인 인터페이스
 
 ### 세 가지 필수 함수
 
@@ -192,7 +604,7 @@ namespace vz
 
 ---
 
-## 5. GraphicsDevice 인터페이스
+## 6. GraphicsDevice 인터페이스
 
 ### 추상 클래스 구조
 `GraphicsDevice`는 모든 백엔드가 구현해야 하는 **추상 클래스**입니다.
@@ -274,7 +686,7 @@ public:
 
 ---
 
-## 6. 포맷 변환 시스템
+## 7. 포맷 변환 시스템
 
 ### 포맷 변환이란?
 엔진은 플랫폼 독립적인 `Format` 열거형을 사용하지만, Metal은 `MTLPixelFormat`을 사용합니다.
@@ -360,9 +772,9 @@ Metal 백엔드에는 다양한 변환 함수가 구현되어 있습니다:
 
 ---
 
-## 7. 리소스 생성 구현
+## 8. 리소스 생성 구현
 
-### 7.1 SwapChain 생성
+### 8.1 SwapChain 생성
 
 **SwapChain**이란?
 - 화면에 표시할 프레임 버퍼들의 집합
@@ -403,7 +815,7 @@ bool GraphicsDevice_Metal::CreateSwapChain(const SwapChainDesc* desc,
 }
 ```
 
-### 7.2 Buffer 생성
+### 8.2 Buffer 생성
 
 **GPUBuffer**란?
 - GPU 메모리에 저장되는 데이터 블록
@@ -463,7 +875,7 @@ bool GraphicsDevice_Metal::CreateBuffer2(const GPUBufferDesc* desc,
 }
 ```
 
-### 7.3 Texture 생성
+### 8.3 Texture 생성
 
 **Texture**란?
 - 2D/3D 이미지 데이터
@@ -538,7 +950,7 @@ bool GraphicsDevice_Metal::CreateTexture(const TextureDesc* desc,
 }
 ```
 
-### 7.4 Shader 생성
+### 8.4 Shader 생성
 
 **Shader**란?
 - GPU에서 실행되는 프로그램
@@ -591,7 +1003,7 @@ bool GraphicsDevice_Metal::CreateShader(ShaderStage stage,
 }
 ```
 
-### 7.5 Sampler 생성
+### 8.5 Sampler 생성
 
 **Sampler**란?
 - 텍스처 샘플링 방법 정의
@@ -632,7 +1044,7 @@ bool GraphicsDevice_Metal::CreateSampler(const SamplerDesc* desc, Sampler* sampl
 }
 ```
 
-### 7.6 PipelineState 생성
+### 8.6 PipelineState 생성
 
 **PipelineState**란?
 - 렌더링에 필요한 모든 상태를 묶은 객체
@@ -751,9 +1163,9 @@ bool GraphicsDevice_Metal::CreatePipelineState(const PipelineStateDesc* desc,
 
 ---
 
-## 8. 렌더링 파이프라인
+## 9. 렌더링 파이프라인
 
-### 8.1 렌더패스 시작 (RenderPassBegin)
+### 9.1 렌더패스 시작 (RenderPassBegin)
 
 **RenderPass**란?
 - 렌더 타겟(프레임버퍼)에 그리기 위한 컨텍스트
@@ -856,7 +1268,7 @@ void GraphicsDevice_Metal::RenderPassBegin(const RenderPassImage* images,
 }
 ```
 
-### 8.2 상태 바인딩
+### 9.2 상태 바인딩
 
 #### 파이프라인 바인딩:
 ```objc
@@ -944,7 +1356,7 @@ void GraphicsDevice_Metal::BindViewports(uint32_t NumViewports,
 }
 ```
 
-### 8.3 Draw 명령
+### 9.3 Draw 명령
 
 #### 기본 Draw:
 ```objc
@@ -1010,7 +1422,7 @@ void GraphicsDevice_Metal::DrawInstanced(uint32_t vertexCount,
 }
 ```
 
-### 8.4 렌더패스 종료
+### 9.4 렌더패스 종료
 
 ```objc
 void GraphicsDevice_Metal::RenderPassEnd(CommandList cmd)
@@ -1030,9 +1442,9 @@ void GraphicsDevice_Metal::RenderPassEnd(CommandList cmd)
 
 ---
 
-## 9. 커맨드 리스트와 프레임 동기화
+## 10. 커맨드 리스트와 프레임 동기화
 
-### 9.1 커맨드 리스트 개념
+### 10.1 커맨드 리스트 개념
 
 **커맨드 리스트**란?
 - GPU에 보낼 명령들을 기록하는 버퍼
@@ -1063,7 +1475,7 @@ void GraphicsDevice_Metal::RenderPassEnd(CommandList cmd)
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 9.2 CommandList 내부 구조
+### 10.2 CommandList 내부 구조
 
 ```cpp
 struct CommandList_Metal
@@ -1105,7 +1517,7 @@ struct CommandList_Metal
 };
 ```
 
-### 9.3 BeginCommandList
+### 10.3 BeginCommandList
 
 ```objc
 CommandList GraphicsDevice_Metal::BeginCommandList(QUEUE_TYPE queue)
@@ -1138,7 +1550,7 @@ CommandList GraphicsDevice_Metal::BeginCommandList(QUEUE_TYPE queue)
 }
 ```
 
-### 9.4 트리플 버퍼링과 프레임 동기화
+### 10.4 트리플 버퍼링과 프레임 동기화
 
 **트리플 버퍼링**이란?
 - 3개의 프레임 버퍼를 번갈아 사용
@@ -1168,7 +1580,7 @@ dispatch_semaphore_wait(frameSemaphore, DISPATCH_TIME_FOREVER);
 }];
 ```
 
-### 9.5 SubmitCommandLists
+### 10.5 SubmitCommandLists
 
 ```objc
 void GraphicsDevice_Metal::SubmitCommandLists()
@@ -1240,7 +1652,7 @@ void GraphicsDevice_Metal::SubmitCommandLists()
 }
 ```
 
-### 9.6 지연 해제 (Deferred Destruction)
+### 10.6 지연 해제 (Deferred Destruction)
 
 GPU가 아직 사용 중인 리소스를 즉시 해제하면 크래시가 발생합니다.
 지연 해제 시스템은 리소스를 몇 프레임 후에 안전하게 해제합니다.
@@ -1277,9 +1689,9 @@ struct AllocationHandler_Metal
 
 ---
 
-## 10. Metal Triangle 샘플
+## 11. Metal Triangle 샘플
 
-### 10.1 샘플 개요
+### 11.1 샘플 개요
 
 Metal 백엔드가 제대로 작동하는지 검증하기 위한 기본 샘플입니다.
 RGB 컬러의 삼각형 하나를 화면에 렌더링합니다.
@@ -1300,7 +1712,7 @@ RGB 컬러의 삼각형 하나를 화면에 렌더링합니다.
 └────────────────────────────────┘
 ```
 
-### 10.2 MSL 셰이더 (Metal Shading Language)
+### 11.2 MSL 셰이더 (Metal Shading Language)
 
 ```metal
 #include <metal_stdlib>
@@ -1344,7 +1756,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]])
 - `[[stage_in]]`: 이전 스테이지에서 입력 받음
 - C++11 스타일 문법 기반
 
-### 10.3 버텍스 데이터
+### 11.3 버텍스 데이터
 
 ```cpp
 // 버텍스 구조체 정의
@@ -1375,7 +1787,7 @@ Vertex vertices[] = {
         -Y (-0.5)
 ```
 
-### 10.4 전체 샘플 코드 흐름
+### 11.4 전체 샘플 코드 흐름
 
 ```objc
 @implementation AppDelegate
@@ -1518,7 +1930,7 @@ Vertex vertices[] = {
 @end
 ```
 
-### 10.5 빌드 및 실행
+### 11.5 빌드 및 실행
 
 ```bash
 # 1. 프로젝트 디렉토리로 이동
@@ -1542,7 +1954,7 @@ make
 
 ---
 
-## 11. 현재 구현 상태
+## 12. 현재 구현 상태
 
 ### 구현 완료 ✅
 
@@ -1597,7 +2009,7 @@ make
 
 ---
 
-## 12. 빌드 방법
+## 13. 빌드 방법
 
 ### macOS (CMake)
 ```bash
@@ -1651,7 +2063,7 @@ endif()
 
 ---
 
-## 13. 다음 단계
+## 14. 다음 단계
 
 ### 구현 로드맵
 
