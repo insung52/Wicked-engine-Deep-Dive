@@ -138,7 +138,7 @@ commandList->SetGraphicsRootConstantBufferView(
 
 ### 상수 버퍼 정렬 규칙
 
-```hlsl
+```c
 // HLSL 패킹 규칙
 cbuffer PerObject : register(b0) {
     float4x4 worldMatrix;  // 64 bytes, offset 0
@@ -271,7 +271,7 @@ GPU 메모리의 연속된 영역. 리소스가 실제로 저장되는 곳.
 │  │ Default Heap│  │ Upload Heap │  │ Readback    │     │
 │  │             │  │             │  │ Heap        │     │
 │  │ GPU 전용    │  │ CPU→GPU     │  │ GPU→CPU     │     │
-│  │ 가장 빠름   │  │ 업로드용    │  │ 다운로드용   │     │
+│  │ 가장 빠름    │  │ 업로드용     │  │ 다운로드용    │     │
 │  └─────────────┘  └─────────────┘  └─────────────┘     │
 └─────────────────────────────────────────────────────────┘
 ```

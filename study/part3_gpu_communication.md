@@ -7,6 +7,83 @@ Part 2에서 그래픽스 파이프라인이 어떻게 동작하는지 배웠다
 
 ---
 
+## DX12 용어/약어 정리
+
+코드를 읽기 전에 자주 나오는 접두사와 약어를 알아두자.
+
+### 인터페이스 접두사
+
+| 접두사 | 의미 | 예시 |
+|--------|------|------|
+| `ID3D12` | Direct3D 12 인터페이스 | `ID3D12Device`, `ID3D12Resource` |
+| `IDXGI` | DirectX Graphics Infrastructure | `IDXGISwapChain`, `IDXGIAdapter` |
+| `D3D12_` | DX12 구조체/열거형 | `D3D12_RESOURCE_DESC` |
+| `DXGI_` | DXGI 구조체/열거형 | `DXGI_FORMAT_R8G8B8A8_UNORM` |
+
+### 파이프라인 스테이지 약어
+
+| 약어 | 전체 이름 | 역할 |
+|------|-----------|------|
+| `IA` | Input Assembler | 버텍스/인덱스 조립 |
+| `VS` | Vertex Shader | 버텍스 변환 |
+| `HS` | Hull Shader | 테셀레이션 제어 |
+| `DS` | Domain Shader | 테셀레이션 결과 처리 |
+| `GS` | Geometry Shader | 기하 생성/삭제 |
+| `RS` | Rasterizer | 삼각형 → 픽셀 |
+| `PS` | Pixel Shader | 픽셀 색상 결정 |
+| `OM` | Output Merger | 깊이테스트, 블렌딩 |
+| `CS` | Compute Shader | 범용 GPU 계산 |
+| `SO` | Stream Output | 버텍스 데이터 출력 |
+
+### 뷰(View) 약어
+
+| 약어 | 전체 이름 | 용도 |
+|------|-----------|------|
+| `RTV` | Render Target View | 렌더 타겟에 쓰기 |
+| `DSV` | Depth Stencil View | 깊이/스텐실 버퍼 |
+| `SRV` | Shader Resource View | 셰이더에서 읽기 |
+| `UAV` | Unordered Access View | 셰이더에서 읽기/쓰기 |
+| `CBV` | Constant Buffer View | 상수 버퍼 접근 |
+
+### 기타 중요 약어
+
+| 약어 | 전체 이름 | 설명 |
+|------|-----------|------|
+| `PSO` | Pipeline State Object | 파이프라인 설정 묶음 |
+| `RS` | Root Signature | 리소스 바인딩 레이아웃 |
+| `GPU` | Graphics Processing Unit | 그래픽 처리 장치 |
+| `VRAM` | Video RAM | GPU 전용 메모리 |
+| `CB` | Constant Buffer | 상수 버퍼 |
+| `VB` | Vertex Buffer | 버텍스 버퍼 |
+| `IB` | Index Buffer | 인덱스 버퍼 |
+| `RT` | Render Target | 렌더링 대상 버퍼 |
+| `MRT` | Multiple Render Targets | 다중 렌더 타겟 |
+| `MSAA` | Multi-Sample Anti-Aliasing | 다중 샘플 안티앨리어싱 |
+
+### 함수 이름 읽는 법
+
+```cpp
+commandList->IASetVertexBuffers(0, 1, &vbView);
+//          IA  Set  VertexBuffers
+//          │   │    └─ 무엇을: 버텍스 버퍼들
+//          │   └─ 동작: 설정
+//          └─ 어디에: Input Assembler
+
+commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+//          OM  Set  RenderTargets
+//          │   │    └─ 무엇을: 렌더 타겟들
+//          │   └─ 동작: 설정
+//          └─ 어디에: Output Merger
+
+device->CreateCommittedResource(...);
+//      Create  Committed  Resource
+//      │       │          └─ 무엇을: 리소스
+//      │       └─ 타입: Committed (자동 힙 할당)
+//      └─ 동작: 생성
+```
+
+---
+
 ## 3.1 그래픽스 API 역할
 
 ### API란?
@@ -615,9 +692,9 @@ commandList->ExecuteBundle(bundle);  // 빠른 재실행
 │  ┌─────────────────┐ ┌─────────────────┐ ┌───────────────┐ │
 │  │ Graphics Engine │ │ Compute Engine  │ │ Copy Engine   │ │
 │  │                 │ │                 │ │               │ │
-│  │  렌더링 작업    │ │  컴퓨트 작업    │ │  복사 작업    │ │
-│  │  + 컴퓨트       │ │  + 복사        │ │               │ │
-│  │  + 복사        │ │                 │ │               │ │
+│  │  렌더링 작업      │ │  컴퓨트 작업     │ │  복사 작업      │ │
+│  │  + 컴퓨트        │ │  + 복사         │ │                │ │
+│  │  + 복사          │ │                 │ │               │ │
 │  └────────┬────────┘ └────────┬────────┘ └───────┬───────┘ │
 └───────────│─────────────────────│──────────────────│────────┘
             ↑                     ↑                  ↑
