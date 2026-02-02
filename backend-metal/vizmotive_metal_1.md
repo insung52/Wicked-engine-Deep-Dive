@@ -957,6 +957,416 @@ cd bin/Darwin_Release
 
 ---
 
+## Phase 5: 실제 렌더링 구현
+
+Phase 4까지 엔진 통합은 완료되었지만, ShaderEngineMetal의 `Render()` 함수는 화면 클리어만 수행하는 상태였습니다. Phase 5에서는 실제 렌더링 기능을 구현합니다.
+
+### 구현 전략: 2단계 접근
+
+| 단계 | 목표 | 상태 |
+|------|------|------|
+| Phase 5A | 하드코딩된 삼각형 렌더링 | ✅ 완료 |
+| Phase 5B | Scene 기반 메쉬 렌더링 인프라 | ✅ 완료 |
+
+**왜 2단계로 나누었는가?**
+- Phase 5A: 파이프라인이 제대로 동작하는지 간단한 삼각형으로 검증
+- Phase 5B: 카메라/인스턴스 상수버퍼, Scene 렌더러블 순회 구조 구현
+
+---
+
+### Phase 5A: 하드코딩된 삼각형 렌더링
+
+#### 핵심 문제: Metal 내부 접근
+
+GRenderPath3DMetal에서 Metal API를 직접 사용하려면 GraphicsDevice_Metal의 내부 구조에 접근해야 합니다.
+
+**해결: 헬퍼 함수 추가**
+
+#### 1. GraphicsDevice_Metal.h 수정
+
+```cpp
+class GraphicsDevice_Metal : public GraphicsDevice
+{
+public:
+    // ... 기존 함수들 ...
+
+    // Metal 내부 접근용 헬퍼 (ShaderEngineMetal 전용)
+    void* GetMTLDevice() const { return (__bridge void*)device; }
+    void* GetRenderCommandEncoder(CommandList cmd) const;
+    void* GetCommandBuffer(CommandList cmd) const;
+};
+```
+
+#### 2. GraphicsDevice_Metal.mm 구현 추가
+
+```cpp
+void* GraphicsDevice_Metal::GetRenderCommandEncoder(CommandList cmd) const
+{
+    if (!cmd.internal_state)
+        return nullptr;
+
+    CommandList_Metal* cmdList = static_cast<CommandList_Metal*>(cmd.internal_state);
+    return (__bridge void*)cmdList->renderEncoder;
+}
+
+void* GraphicsDevice_Metal::GetCommandBuffer(CommandList cmd) const
+{
+    if (!cmd.internal_state)
+        return nullptr;
+
+    CommandList_Metal* cmdList = static_cast<CommandList_Metal*>(cmd.internal_state);
+    return (__bridge void*)cmdList->commandBuffer;
+}
+```
+
+#### 3. SimpleShaders.metal
+
+**경로**: `EngineShaders/ShaderEngineMetal/Shaders/SimpleShaders.metal`
+
+```metal
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexOut {
+    float4 position [[position]];
+    float3 color;
+};
+
+vertex VertexOut simple_vertex(uint vid [[vertex_id]]) {
+    // 하드코딩된 삼각형 정점 (NDC 좌표)
+    float2 positions[3] = {
+        float2(-0.5, -0.5),  // 좌하단
+        float2( 0.5, -0.5),  // 우하단
+        float2( 0.0,  0.5)   // 상단 중앙
+    };
+
+    // RGB 색상
+    float3 colors[3] = {
+        float3(1.0, 0.0, 0.0),  // 빨강
+        float3(0.0, 1.0, 0.0),  // 초록
+        float3(0.0, 0.0, 1.0)   // 파랑
+    };
+
+    VertexOut out;
+    out.position = float4(positions[vid], 0.0, 1.0);
+    out.color = colors[vid];
+    return out;
+}
+
+fragment float4 simple_fragment(VertexOut in [[stage_in]]) {
+    return float4(in.color, 1.0);
+}
+```
+
+#### 4. ShaderEngineMetal.mm 확장
+
+GRenderPath3DMetal 클래스에 삼각형 렌더링 기능 추가:
+
+```cpp
+class GRenderPath3DMetal : public GRenderPath3D
+{
+private:
+    // Metal 리소스
+    id<MTLDevice> mtlDevice = nil;
+    id<MTLLibrary> shaderLibrary = nil;
+    id<MTLRenderPipelineState> simplePSO = nil;
+    bool pipelinesInitialized = false;
+    bool initializationFailed = false;
+
+    void InitializePipelines()
+    {
+        if (pipelinesInitialized || initializationFailed) return;
+
+        // 1. MTLDevice 생성
+        mtlDevice = MTLCreateSystemDefaultDevice();
+
+        // 2. 셰이더 소스 컴파일 (MSL 소스 내장)
+        NSError* error = nil;
+        NSString* source = @"... MSL 소스 ...";
+        shaderLibrary = [mtlDevice newLibraryWithSource:source
+                                                options:nil
+                                                  error:&error];
+
+        // 3. 파이프라인 디스크립터 생성
+        MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
+        desc.vertexFunction = [shaderLibrary newFunctionWithName:@"simple_vertex"];
+        desc.fragmentFunction = [shaderLibrary newFunctionWithName:@"simple_fragment"];
+        desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+
+        // 4. 파이프라인 상태 생성
+        simplePSO = [mtlDevice newRenderPipelineStateWithDescriptor:desc error:&error];
+        pipelinesInitialized = (simplePSO != nil);
+    }
+
+public:
+    bool Render(const float dt) override
+    {
+        if (!device) return false;
+
+        // 최초 1회 파이프라인 초기화
+        if (!pipelinesInitialized && !initializationFailed) {
+            InitializePipelines();
+        }
+
+        // 렌더 패스 시작
+        CommandList cmd = device->BeginCommandList();
+        device->RenderPassBegin(&swapChain_, cmd);
+
+        // 뷰포트 설정
+        Viewport vp;
+        vp.width = (float)swapChain_.desc.width;
+        vp.height = (float)swapChain_.desc.height;
+        device->BindViewports(1, &vp, cmd);
+
+        // 삼각형 그리기
+        if (pipelinesInitialized && simplePSO) {
+            auto* metalDevice = dynamic_cast<GraphicsDevice_Metal*>(device);
+            if (metalDevice) {
+                void* encoderPtr = metalDevice->GetRenderCommandEncoder(cmd);
+                if (encoderPtr) {
+                    id<MTLRenderCommandEncoder> encoder =
+                        (__bridge id<MTLRenderCommandEncoder>)encoderPtr;
+
+                    [encoder setRenderPipelineState:simplePSO];
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:3];
+                }
+            }
+        }
+
+        device->RenderPassEnd(cmd);
+        device->SubmitCommandLists();
+        return true;
+    }
+};
+```
+
+#### 5. CMakeLists.txt 수정
+
+ShaderEngineMetal이 GBackendMetal에 링크되도록 설정:
+
+```cmake
+# Include directories에 GraphicsBackends 추가
+target_include_directories(ShaderEngineMetal PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../EngineCore
+    ${CMAKE_SOURCE_DIR}/../../GraphicsBackends  # 추가
+)
+
+# GBackendMetal 링크
+target_link_directories(ShaderEngineMetal PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../bin/${CMAKE_SYSTEM_NAME}_${CMAKE_BUILD_TYPE}
+)
+target_link_libraries(ShaderEngineMetal PRIVATE
+    VizEngineCore
+    GBackendMetal  # 추가
+)
+```
+
+#### 6. TestShaderEngineMetal 테스트 앱
+
+**경로**: `Examples/TestShaderEngineMetal/main.mm`
+
+ShaderEngineMetal을 통한 렌더링 테스트 앱:
+
+```objc
+@implementation AppDelegate
+
+- (void)applicationDidFinishLaunching:(NSNotification*)notification
+{
+    // 1. GraphicsDevice_Metal 직접 생성
+    _device = new GraphicsDevice_Metal();
+    _device->Initialize(ValidationMode::Disabled, GPUPreference::Discrete);
+
+    // 2. ShaderEngineMetal 동적 로드
+    _shaderHandle = dlopen("libShaderEngineMetal.dylib", RTLD_NOW);
+    _shaderInit = (FP_Initialize)dlsym(_shaderHandle, "Initialize");
+    _shaderNewRenderPath = (FP_NewGRenderPath)dlsym(_shaderHandle, "NewGRenderPath");
+
+    // 3. 윈도우 및 스왑체인 생성
+    // ...
+
+    // 4. ShaderEngineMetal 초기화
+    _shaderInit(_device);
+    _shaderLoadRenderer();
+
+    // 5. GRenderPath3D 생성
+    _renderPath = _shaderNewRenderPath(_swapChain, _rtRenderFinal);
+    _renderPath->ResizeCanvas(800, 600);
+
+    // 6. 렌더 타이머 시작 (60 FPS)
+    self.renderTimer = [NSTimer scheduledTimerWithTimeInterval:1.0/60.0
+                                                        target:self
+                                                      selector:@selector(render)
+                                                       repeats:YES];
+}
+
+- (void)render
+{
+    _renderPath->Render(1.0f / 60.0f);  // 삼각형 렌더링
+}
+
+@end
+```
+
+### 빌드 결과
+
+```bash
+# GBackendMetal 빌드 (헬퍼 함수 포함)
+cd GraphicsBackends/build
+cmake --build . --config Release
+
+# ShaderEngineMetal 빌드
+cd EngineShaders/ShaderEngineMetal/build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j8
+
+# TestShaderEngineMetal 빌드
+cd EngineCore/build
+cmake --build . --target TestShaderEngineMetal
+```
+
+### 테스트 결과
+
+```
+2026-02-01 20:44:53 Metal device initialized: Apple M3
+2026-02-01 20:44:53 Loading ShaderEngineMetal from: .../libShaderEngineMetal.dylib
+2026-02-01 20:44:53 ShaderEngineMetal loaded successfully
+2026-02-01 20:44:53 SwapChain created: 800x600
+2026-02-01 20:44:53 [Metal] ShaderEngineMetal initialized with device: Apple M3
+2026-02-01 20:44:53 [Metal] Renderer initialized successfully
+2026-02-01 20:44:53 [Metal] GRenderPath3DMetal created
+2026-02-01 20:44:53 [Metal] Initializing simple triangle pipelines...
+2026-02-01 20:44:53 [Metal] Device adapter: Apple M3
+2026-02-01 20:44:53 [Metal] Shader library compiled successfully
+2026-02-01 20:44:53 [Metal] Simple triangle pipeline initialized successfully
+2026-02-01 20:44:53 GRenderPath3D created and ready for triangle rendering!
+```
+
+| 항목 | 결과 |
+|------|------|
+| 파이프라인 초기화 | ✅ 성공 |
+| MSL 셰이더 컴파일 | ✅ 성공 |
+| 렌더 인코더 접근 | ✅ 성공 |
+| 삼각형 렌더링 | ✅ 성공 |
+
+### Phase 5A 변경 파일 요약
+
+| 파일 | 변경 유형 | 설명 |
+|------|----------|------|
+| `GraphicsDevice_Metal.h` | 수정 | 헬퍼 함수 선언 추가 |
+| `GraphicsDevice_Metal.mm` | 수정 | 헬퍼 함수 구현 추가 |
+| `ShaderEngineMetal/Shaders/SimpleShaders.metal` | 신규 | MSL 삼각형 셰이더 |
+| `ShaderEngineMetal/ShaderEngineMetal.mm` | 수정 | 파이프라인 초기화 및 삼각형 렌더링 |
+| `ShaderEngineMetal/CMakeLists.txt` | 수정 | GBackendMetal 링크 추가 |
+| `Examples/TestShaderEngineMetal/main.mm` | 신규 | 통합 테스트 앱 |
+| `EngineCore/CMakeLists.txt` | 수정 | TestShaderEngineMetal 빌드 추가 |
+
+---
+
+### Phase 5B: Scene 기반 메쉬 렌더링 (✅ 완료)
+
+Phase 5A에서 파이프라인이 정상 동작함을 확인했으므로, Phase 5B에서는 실제 Scene 데이터를 기반으로 렌더링 인프라를 구현했습니다.
+
+#### 구현 내용
+
+**1. 메쉬 셰이더 (MeshShaders.metal 및 임베디드 MSL)**
+
+상수 버퍼 구조체:
+```metal
+struct CameraConstants {
+    float4x4 viewProjection;
+    float4x4 view;
+    float4x4 projection;
+    float3 cameraPosition;
+    float padding;
+};
+
+struct InstanceConstants {
+    float4x4 world;
+    float4 color;
+};
+```
+
+셰이더 함수:
+- `mesh_vertex_simple`: 위치 기반 정점 셰이더
+- `mesh_fragment_solid`: 단색 프래그먼트 셰이더
+- `mesh_fragment_lit`: 디퓨즈 라이팅 프래그먼트 셰이더
+
+**2. GRenderPath3DMetal 확장**
+
+추가된 파이프라인:
+```cpp
+id<MTLRenderPipelineState> meshSolidPSO;   // 단색 메쉬 파이프라인
+id<MTLRenderPipelineState> meshLitPSO;     // 라이팅 메쉬 파이프라인
+id<MTLBuffer> cameraConstantsBuffer;       // 카메라 상수 버퍼
+id<MTLBuffer> instanceConstantsBuffer;     // 인스턴스 상수 버퍼
+```
+
+**3. Render() 메서드 확장**
+
+```cpp
+bool Render(const float dt) override
+{
+    // 1. 카메라 상수 업데이트
+    if (camera) {
+        CameraConstantsCPU* camData = (CameraConstantsCPU*)[cameraConstantsBuffer contents];
+        camData->viewProjection = camera->GetViewProjection();
+        camData->view = camera->GetView();
+        camData->projection = camera->GetProjection();
+        camData->cameraPosition = camera->GetWorldEye();
+    }
+
+    // 2. Scene 렌더러블 순회
+    if (scene && camera) {
+        for (Entity entity : scene->GetRenderableEntities()) {
+            GRenderableComponent* renderable = ...;
+
+            // 인스턴스 상수 업데이트
+            instData->world = renderable->transform->GetWorldMatrix();
+            instData->color = material->GetBaseColor();
+
+            // 파이프라인 바인딩 및 드로우
+            [encoder setRenderPipelineState:meshLitPSO];
+            [encoder setVertexBuffer:cameraConstantsBuffer ...];
+            // ...
+        }
+    }
+
+    // 3. Scene 컨텐츠가 없으면 Phase 5A 삼각형 폴백
+    if (!hasSceneContent) {
+        [encoder setRenderPipelineState:simplePSO];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle ...];
+    }
+}
+```
+
+**4. 테스트 결과**
+
+```
+[Metal] Shader library compiled successfully
+[Metal] Simple triangle pipeline initialized successfully
+[Metal] Mesh shader library compiled successfully
+[Metal] Mesh rendering pipelines initialized successfully
+```
+
+#### 현재 한계점 및 다음 단계
+
+**구현 완료:**
+- ✅ 카메라 상수 버퍼 관리
+- ✅ 인스턴스 상수 버퍼 관리
+- ✅ 메쉬 렌더링 파이프라인 (Solid, Lit)
+- ✅ Scene 렌더러블 순회 구조
+- ✅ 머티리얼 색상 적용
+
+**다음 단계 (Phase 6):**
+1. GPUBuffer에서 실제 Metal 버퍼 접근
+2. 정점/인덱스 버퍼 바인딩
+3. 텍스처 바인딩
+4. 전체 Forward 렌더링 파이프라인
+
+---
+
 ## 현재 상태 요약
 
 | Phase | 내용 | 상태 |
@@ -965,9 +1375,15 @@ cd bin/Darwin_Release
 | Phase 2 | EngineCore macOS 빌드, 크로스 플랫폼 호환성 | ✅ 완료 |
 | Phase 3 | Metal 백엔드 핵심 기능 (리소스, 커맨드, 드로우) | ✅ 완료 |
 | Phase 4 | 셰이더 엔진 모듈 통합 | ✅ 완료 |
-| Phase 5 | 실제 렌더링 구현 | ⏳ 다음 단계 |
+| Phase 5A | 하드코딩된 삼각형 렌더링 | ✅ 완료 |
+| Phase 5B | Scene 기반 메쉬 렌더링 인프라 | ✅ 완료 |
+| Phase 6 | 실제 지오메트리 버퍼 바인딩 | ⏳ 다음 단계 |
 
 **완성된 라이브러리:**
 - `libVizEngineCore.dylib` (~4.3MB) - 엔진 코어
 - `libGBackendMetal.dylib` (~2.6MB) - Metal 그래픽스 백엔드
-- `libShaderEngineMetal.dylib` (~78KB) - Metal 셰이더 엔진
+- `libShaderEngineMetal.dylib` (~81KB) - Metal 셰이더 엔진
+
+**테스트 앱:**
+- `MetalTriangleSample.app` - GBackendMetal 직접 사용 테스트
+- `TestShaderEngineMetal.app` - ShaderEngineMetal 통합 테스트
