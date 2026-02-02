@@ -1563,3 +1563,198 @@ internal_state->footprints.resize(GetTextureSubresourceCount(texture->desc));
 | 22 | `43b93085` | CommandList BlockAllocator 풀링 | 2026-01-29 |
 | 24 | `2e823bb2` | CPU 텍스처 region copy (footprint 지원) | 2026-01-29 |
 | 25 | `24824a1c` | 텍스처 헬퍼 함수 + CreateTexture 정리 | 2026-01-29 |
+
+---
+
+## VizMotive 자체 버그 수정
+
+### Image/Font PSO 렌더 타겟 포맷 불일치 수정 (2026-02-02)
+
+#### 문제 상황
+Sample08 실행 시 D3D12 에러 발생:
+```
+D3D12 ERROR: ID3D12CommandList::DrawInstanced: The render target format in slot 0
+does not match that specified by the current pipeline state.
+(pipeline state = R10G10B10A2_UNORM, render target format = R11G11B10_FLOAT,
+RTV ID3D12Resource* = 'rtMain')
+```
+
+#### 원인 분석
+VizMotive 렌더링 파이프라인에서 두 가지 렌더 타겟 포맷 사용:
+| 렌더 타겟 | 포맷 | 용도 |
+|-----------|------|------|
+| `rtMain` | `R11G11B10_FLOAT` | HDR 내부 렌더링 (3D) |
+| `swapChain` / `rtRenderFinal` | `R10G10B10A2_UNORM` | SDR 최종 출력 (2D) |
+
+기존 코드는 Image/Font PSO를 `R10G10B10A2_UNORM` 하나로만 생성하여 `rtMain`에 렌더링할 때 포맷 불일치 발생.
+
+#### 해결책: 포맷별 PSO 생성
+
+##### 1. RT_FORMAT_MODE enum 추가
+```cpp
+// Image.cpp, Font.cpp
+enum RT_FORMAT_MODE
+{
+    RT_FORMAT_SDR,  // R10G10B10A2_UNORM (swapchain, rtRenderFinal)
+    RT_FORMAT_HDR,  // R11G11B10_FLOAT (rtMain)
+    RT_FORMAT_MODE_COUNT
+};
+```
+
+##### 2. PSO 배열 확장
+```cpp
+// Image.cpp
+// 변경 전
+static PipelineState imagePSO[2][BLENDMODE_COUNT][...];
+static PipelineState debugPSO;
+
+// 변경 후
+static PipelineState imagePSO[RT_FORMAT_MODE_COUNT][BLENDMODE_COUNT][...];
+static PipelineState debugPSO[RT_FORMAT_MODE_COUNT];
+
+// Font.cpp
+// 변경 전
+static PipelineState PSO[DEPTH_TEST_MODE_COUNT];
+
+// 변경 후
+static PipelineState PSO[RT_FORMAT_MODE_COUNT][DEPTH_TEST_MODE_COUNT];
+```
+
+##### 3. LoadShaders에서 두 포맷 모두 PSO 생성
+```cpp
+// Image.cpp, Font.cpp
+Format rtFormats[RT_FORMAT_MODE_COUNT] = {
+    Format::R10G10B10A2_UNORM,   // RT_FORMAT_SDR
+    FORMAT_rendertargetMain      // RT_FORMAT_HDR (R11G11B10_FLOAT)
+};
+
+for (int f = 0; f < RT_FORMAT_MODE_COUNT; ++f)
+{
+    RenderPassInfo renderpass = {};
+    renderpass.rt_formats[0] = rtFormats[f];
+    // ... PSO 생성 ...
+}
+```
+
+##### 4. Params에 HDR 플래그 추가
+```cpp
+// Image.h
+enum FLAGS
+{
+    // ...
+    HDR_RENDER_TARGET = 1 << 16,  // Render target uses R11G11B10_FLOAT format
+};
+
+constexpr void enableHdrRenderTarget() { _flags |= HDR_RENDER_TARGET; }
+constexpr void disableHdrRenderTarget() { _flags &= ~HDR_RENDER_TARGET; }
+constexpr bool isHdrRenderTarget() const { return _flags & HDR_RENDER_TARGET; }
+
+// Font.h - 동일한 패턴
+```
+
+##### 5. Draw 함수에서 PSO 선택
+```cpp
+// Image.cpp
+int formatMode = params.isHdrRenderTarget() ? RT_FORMAT_HDR : RT_FORMAT_SDR;
+device->BindPipelineState(&imagePSO[formatMode][...], cmd);
+
+// Font.cpp
+int formatMode = params.isHdrRenderTarget() ? RT_FORMAT_HDR : RT_FORMAT_SDR;
+device->BindPipelineState(&PSO[formatMode][params.isDepthTestEnabled()], cmd);
+```
+
+##### 6. 호출부에서 플래그 설정
+```cpp
+// SpriteDraw_Detail.cpp - DrawSpritesAndFonts (rtMain에 렌더링)
+
+// Sprite 렌더링
+params.enableHdrRenderTarget();  // Rendering to rtMain (R11G11B10_FLOAT)
+
+// Font 렌더링
+params.enableHdrRenderTarget();  // Rendering to rtMain (R11G11B10_FLOAT)
+params.enableDepthTest();        // 3D space font rendering requires depth test
+```
+
+#### 수정된 파일 목록
+
+| 파일 | 변경 내용 |
+|------|----------|
+| Image.h | `HDR_RENDER_TARGET` 플래그 + 헬퍼 함수 추가 |
+| Image.cpp | `RT_FORMAT_MODE` enum + PSO 배열 확장 + Draw PSO 선택 로직 |
+| Font.h | `HDR_RENDER_TARGET` 플래그 + 헬퍼 함수 추가 |
+| Font.cpp | `RT_FORMAT_MODE` enum + PSO 배열 확장 + Draw PSO 선택 로직 |
+| SpriteDraw_Detail.cpp | Sprite/Font 렌더링 시 `enableHdrRenderTarget()` + `enableDepthTest()` 호출 |
+
+#### 핵심 포인트
+- 2D UI는 swapchain (SDR)에, 3D 스프라이트/폰트는 rtMain (HDR)에 렌더링됨
+- 각 컨텍스트에서 올바른 PSO 포맷을 선택해야 D3D12 validation 통과
+- 기본값은 SDR이며, HDR 렌더 타겟에 렌더링할 때만 명시적으로 플래그 설정
+
+---
+
+### Sample01/Sample02 종료 시 Hang 수정 (2026-02-02)
+
+#### 문제 상황
+Sample01, Sample02 실행 후 창 닫기 시 프로그램이 종료되지 않고 멈춤:
+```
+[2026-02-02 13:51:13.238] [info] Jobsystem Shutdown...
+[2026-02-02 13:51:14.090] [info] GPU buffer suballocated (offset-based): size=42624736, offset=4912
+```
+
+"Jobsystem Shutdown..." 이후에도 GPU 버퍼 할당 로그가 출력되며 프로그램이 무한 대기 상태.
+
+#### 원인 분석
+Sample01/02에서 비동기 작업(async job)을 시작하고 **종료 전에 대기(wait)하지 않음**:
+
+```cpp
+// Sample01 - line 141-160
+vz::jobsystem::context ctx_load_obj;
+ctx_load_obj.priority = vz::jobsystem::Priority::Low;
+vz::jobsystem::Execute(ctx_load_obj, [scene](vz::jobsystem::JobArgs args) {
+    vzm::VzActor* root_obj_actor = vzm::LoadModelFile("../Assets/obj_files/skull/...");
+    // GPU 버퍼 할당 포함
+    scene->AppendChild(root_obj_actor);
+});
+
+// ... main loop ...
+
+vzm::DeinitEngineLib();  // ❌ Wait 없이 바로 종료 시도
+```
+
+**Race Condition 발생 순서:**
+1. 비동기 작업이 모델 파일 로딩 중 (GPU 버퍼 할당 진행 중)
+2. `DeinitEngineLib()` 호출 → `jobsystem::ShutDown()` 실행
+3. `ShutDown()`이 `alive = false` 설정 후 스레드 종료 대기
+4. 비동기 작업이 GPU 버퍼 할당 중 → 종료 시퀀스와 충돌
+5. 데드락 또는 무한 대기 발생
+
+#### 해결책
+비동기 작업 완료를 기다린 후 엔진 종료:
+
+```cpp
+// Sample01
+// ... main loop ends ...
+
+// Wait for async jobs to complete before engine shutdown
+vz::jobsystem::Wait(ctx_load_obj);
+
+vzm::DeinitEngineLib();
+
+// Sample02 - 동일한 패턴
+vz::jobsystem::Wait(ctx_stl_loader);
+
+vzm::DeinitEngineLib();
+```
+
+#### 수정된 파일 목록
+
+| 파일 | 변경 내용 |
+|------|----------|
+| Examples/Sample001/sample01.cpp | `DeinitEngineLib()` 전에 `vz::jobsystem::Wait(ctx_load_obj)` 추가 |
+| Examples/Sample002/sample02.cpp | `DeinitEngineLib()` 전에 `vz::jobsystem::Wait(ctx_stl_loader)` 추가 |
+
+#### 핵심 포인트
+- 비동기 작업(jobsystem::Execute)을 사용할 때는 종료 전 반드시 Wait() 호출
+- `DeinitEngineLib()` 내부의 `jobsystem::ShutDown()`은 대기 중인 작업만 처리
+- 실행 중인 작업이 GPU 리소스를 할당하면 race condition 발생 가능
+- **규칙**: 앱 종료 전에 모든 async job context에 대해 Wait() 호출 필수
