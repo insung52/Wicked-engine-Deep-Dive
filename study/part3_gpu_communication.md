@@ -60,6 +60,18 @@ Part 2에서 그래픽스 파이프라인이 어떻게 동작하는지 배웠다
 | `MRT` | Multiple Render Targets | 다중 렌더 타겟 |
 | `MSAA` | Multi-Sample Anti-Aliasing | 다중 샘플 안티앨리어싱 |
 
+### 동기화 관련 용어
+
+| 용어 | 설명 |
+|------|------|
+| `Fence` | CPU-GPU 동기화 객체. GPU 작업 완료를 CPU가 확인 |
+| `Semaphore` | GPU-GPU 동기화 객체. 큐 간 작업 순서 보장 |
+| `Barrier` | 리소스 상태 전이 및 메모리 동기화 |
+| `Signal` | 동기화 객체에 완료 신호 보내기 |
+| `Wait` | 동기화 객체의 신호를 기다리기 |
+| `Timeline Semaphore` | 카운터 값 기반 세마포어 (Vulkan 1.2+) |
+| `Binary Semaphore` | 신호/대기 한 번씩 사용하는 세마포어 |
+
 ### 함수 이름 읽는 법
 
 ```cpp
@@ -833,6 +845,120 @@ void RenderFrame() {
     currentFrame = (currentFrame + 1) % FRAME_COUNT;
 }
 ```
+
+### Semaphore (세마포어)
+
+**GPU-GPU 동기화**를 위한 객체. Fence가 CPU-GPU 동기화라면, Semaphore는 GPU 작업들 간의 순서를 보장한다.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    동기화 객체 비교                            │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Fence (펜스)              Semaphore (세마포어)               │
+│   ─────────────             ──────────────────               │
+│   CPU ←→ GPU 동기화         GPU ←→ GPU 동기화                  │
+│                                                              │
+│   ┌─────┐    Signal    ┌─────┐                               │
+│   │ GPU │────────────▶│ CPU │     (GPU 완료를 CPU가 대기)     │
+│   └─────┘              └─────┘                               │
+│                                                              │
+│   ┌───────┐  Signal   ┌───────┐                              │
+│   │Queue A│─────────▶│Queue B│    (큐 간 작업 순서 보장)       │
+│   └───────┘  Wait     └───────┘                              │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### DX12에서의 Semaphore
+
+DX12는 별도의 Semaphore 객체가 없다. 대신 **Fence를 GPU 간 동기화에도 사용**한다.
+
+```cpp
+// 큐 간 동기화 (Copy → Graphics)
+// Copy Queue에서 작업 완료 후 Signal
+copyQueue->ExecuteCommandLists(1, &copyCommandList);
+copyQueue->Signal(syncFence, ++syncFenceValue);  // "복사 끝났어"
+
+// Graphics Queue에서 복사 완료 대기 후 렌더링
+graphicsQueue->Wait(syncFence, syncFenceValue);  // "복사 끝날 때까지 대기"
+graphicsQueue->ExecuteCommandLists(1, &graphicsCommandList);
+```
+
+#### Vulkan에서의 Semaphore
+
+Vulkan은 Semaphore를 명시적으로 제공한다. 두 종류가 있다:
+
+```cpp
+// 1. Binary Semaphore - 신호/대기 한 번씩
+VkSemaphore imageAvailable;   // 스왑체인 이미지 획득 완료
+VkSemaphore renderFinished;   // 렌더링 완료
+
+// 이미지 획득 시 세마포어 신호
+vkAcquireNextImageKHR(device, swapchain, ..., imageAvailable, ...);
+
+// 제출 시: imageAvailable 대기, renderFinished 신호
+VkSubmitInfo submitInfo = {};
+submitInfo.waitSemaphoreCount = 1;
+submitInfo.pWaitSemaphores = &imageAvailable;     // 이거 기다려
+submitInfo.signalSemaphoreCount = 1;
+submitInfo.pSignalSemaphores = &renderFinished;   // 끝나면 이거 신호
+vkQueueSubmit(graphicsQueue, 1, &submitInfo, fence);
+
+// Present 시: renderFinished 대기
+VkPresentInfoKHR presentInfo = {};
+presentInfo.waitSemaphoreCount = 1;
+presentInfo.pWaitSemaphores = &renderFinished;    // 렌더링 끝날 때까지 대기
+vkQueuePresentKHR(presentQueue, &presentInfo);
+```
+
+```cpp
+// 2. Timeline Semaphore - 카운터 값으로 동기화 (Vulkan 1.2+)
+// DX12의 Fence와 개념적으로 동일!
+VkSemaphore timelineSemaphore;
+uint64_t timelineValue = 0;
+
+// Signal: 값 증가
+VkTimelineSemaphoreSubmitInfo timelineInfo = {};
+timelineInfo.signalSemaphoreValueCount = 1;
+timelineInfo.pSignalSemaphoreValues = &(++timelineValue);
+
+// Wait: 특정 값 이상이 될 때까지 대기
+VkSemaphoreWaitInfo waitInfo = {};
+waitInfo.semaphoreCount = 1;
+waitInfo.pSemaphores = &timelineSemaphore;
+waitInfo.pValues = &timelineValue;
+vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+```
+
+#### 동기화 흐름 예시
+
+```
+프레임 N 렌더링 파이프라인:
+
+┌─────────────┐   imageAvailable   ┌─────────────┐   renderFinished   ┌─────────────┐
+│ 이미지 획득   │──────────────────▶│  렌더링     │───────────────────▶│  Present    │
+│ (Swapchain) │    세마포어         │ (Graphics)  │     세마포어        │ (Display)   │
+└─────────────┘                    └─────────────┘                    └─────────────┘
+      │                                   │                                  │
+      │                                   │                                  │
+   GPU 작업                            GPU 작업                           GPU 작업
+   (매우 빠름)                         (렌더링)                          (디스플레이)
+
+세마포어가 없으면?
+→ 아직 이미지 획득 안 됐는데 렌더링 시작
+→ 아직 렌더링 안 끝났는데 화면에 표시
+→ 찢어진 화면, 깨진 이미지!
+```
+
+#### 동기화 객체 정리
+
+| 특성 | DX12 Fence | Vulkan Fence | Vulkan Binary Semaphore | Vulkan Timeline Semaphore |
+|------|------------|--------------|------------------------|---------------------------|
+| CPU 대기 | ✅ | ✅ | ❌ | ✅ |
+| GPU 대기 | ✅ | ❌ | ✅ | ✅ |
+| 값 기반 | ✅ (uint64) | ❌ (bool) | ❌ (bool) | ✅ (uint64) |
+| 주 용도 | CPU↔GPU, GPU↔GPU | CPU↔GPU | GPU↔GPU | 둘 다 |
 
 ### Resource Barrier (리소스 배리어)
 
