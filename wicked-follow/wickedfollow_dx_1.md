@@ -97,7 +97,7 @@ if (scene->IsWetmapProcessingRequired()) {
 
 #### VizMotive 적용 완료 ✅
 
-**적용 일자**: 2025-01-26
+**적용 일자**: 2026-01-26
 
 **변경 파일**:
 - `GraphicsDevice_DX12.h`: `wait_queues` 벡터 및 `WaitQueue` 선언 제거
