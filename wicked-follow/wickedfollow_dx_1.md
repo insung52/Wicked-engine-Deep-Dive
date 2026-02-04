@@ -54,6 +54,8 @@
 ## #1. `bf27a9fb` - Linux hang fix ✅ 적용 완료
 **날짜**: 2025-03-12 | **카테고리**: 안정성 | **우선순위**: 중간
 
+### 상세 분석 문서 : https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/01_bf27a9fb_linux_hang_fix.md
+
 **문제**: `WaitQueue()`가 Linux에서 행(hang) 유발
 - 큐가 자기 자신을 기다리거나 세마포어 동기화 문제
 
