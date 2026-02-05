@@ -143,6 +143,7 @@ void GraphicsDevice_DX12::WaitQueue(CommandList cmd, QUEUE_TYPE wait_for)
 
 ```cpp
 // frame_fence 명명 (큐 타입별)
+// [buffer] → 프레임 인덱스
 switch (queue) {
 case QUEUE_GRAPHICS:
     dx12_check(frame_fence[buffer][queue]->SetName(L"frame_fence[QUEUE_GRAPHICS]"));
