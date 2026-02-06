@@ -259,47 +259,17 @@ dx12_check(cmd.fence->Signal(0));
 ## #11. `8582ea3d` - Terrain determinism fixes ✅ 적용 완료
 **날짜**: 2025-04-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
-**DX12 변경**: PSO 바인딩 최적화
-```cpp
-// static PSO 조기 종료 추가
-else
-    return; // early exit for static pso
+### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/11_8582ea3d_pso_binding_optimization.md)
 
-// dynamic PSO 캐싱 개선
-if (commandlist.prev_pipeline_hash == pipeline_hash) {
-    commandlist.active_pso = pso;  // 이 줄 추가!
-    return; // early exit for dynamic pso|renderpass
-}
-```
+**요약**: PSO(Pipeline State Object) 바인딩 최적화 및 버그 수정
+- **Static PSO 조기 종료**: `else return` 추가로 불필요한 해시 계산 회피
+- **Dynamic PSO 캐시 히트**: `active_pso = pso` 갱신 추가로 상태 일관성 보장
+- **문제**: 해시 캐시 히트 시 `active_pso` 미갱신 → 다른 PSO 전환 후 잘못된 참조 가능
 
-**VizMotive 비교**:
-- VizMotive (`GraphicsDevice_DX12.cpp:6839`)는 early exit 시 `active_pso = pso` 설정 안함 → 잠재적 버그
-- static PSO 블록 뒤 `else return;` 없음
-- **적용 권장**: 중간 (PSO 상태 일관성)
+**VizMotive 적용 완료** (2026-01-27, 커밋 `2b18b324`)
+- `GraphicsDevice_DX12.cpp`: static PSO 조기 종료 + dynamic PSO active_pso 갱신
 
-#### VizMotive 적용 완료 ✅
-
-**적용 일자**: 2026-01-27
-**VizMotive 커밋**: `2b18b324`
-
-**적용 내용** (`GraphicsDevice_DX12.cpp`):
-```cpp
-// 1. static PSO 조기 종료 추가 (line 6843)
-else
-    return; // early exit for static pso
-
-// 2. dynamic PSO 캐싱 개선 (line 6855-6857)
-if (commandlist.prev_pipeline_hash == pipeline_hash) {
-    commandlist.active_pso = pso;  // 누락되었던 부분 추가
-    return; // early exit for dynamic pso|renderpass
-}
-```
-
-**수정 효과**:
-- PSO 해시가 일치해도 `active_pso`가 갱신되지 않아 발생할 수 있는 불일치 버그 수정
-- static PSO 경로에서 불필요한 해시 계산/비교 회피
-
-**참고**: 이 커밋의 본래 목적인 "Terrain determinism"은 `wiNoise.h`의 크로스 플랫폼 결정론적 노이즈 구현 관련이며, DX12 변경은 부수적인 PSO 최적화임
+**참고**: 커밋 본래 목적은 Terrain determinism (wiNoise.h)이며, DX12 변경은 부수적임
 
 ---
 
@@ -335,82 +305,33 @@ void CreateMipgenSubresources(Texture& texture);
 ## #13. `e6a003cd` - stringconvert replacement ✅ 적용 완료
 **날짜**: 2025-05-20 | **카테고리**: 리팩토링/안정성 | **우선순위**: 중간
 
-**변경 내용**:
-1. **버퍼 크기 필수화**: `dest_size_in_characters` 기본값 제거 → 필수 파라미터
-2. **커스텀 UTF-8 구현**: Windows API/deprecated std::wstring_convert 제거
-3. **크로스 플랫폼**: 모든 플랫폼에서 동일한 동작
+### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/13_e6a003cd_stringconvert_replacement.md)
 
-```cpp
-// 변경 전 - 기본값 -1 (위험)
-int StringConvert(const wchar_t* from, char* to, int dest_size = -1);
+**요약**: StringConvert 함수 전면 교체 (보안/안정성 개선)
+- **버퍼 오버플로우**: `dest_size = -1` 기본값 → 필수 파라미터화
+- **Deprecated API**: `std::wstring_convert` → 커스텀 UTF-8 인코딩/디코딩 구현
+- **Dangling Pointer**: `cv.from_bytes(from).c_str()` → 임시 객체 제거, 직접 버퍼 쓰기
 
-// 변경 후 - 크기 필수
-int StringConvert(const wchar_t* from, char* to, int dest_size);
-```
-
-**VizMotive 문제점** (`Helpers.h:87-135`):
-1. **버퍼 오버플로우**: `dest_size_in_characters = -1` 기본값 유지
-2. **Deprecated API**: `std::wstring_convert` 사용 (C++17에서 deprecated)
-3. **UB 버그**: 비-Windows에서 임시 객체 포인터 반환
-   ```cpp
-   // Line 102 - 버그!
-   auto result = cv.from_bytes(from).c_str();  // 임시 객체 → dangling pointer
-   ```
-4. **플랫폼 차이**: Windows API vs deprecated STL
-
-#### VizMotive 적용 완료 ✅
-
-**적용 일자**: 2026-01-27
-
-**적용 내용**:
-
-1. **`Helpers.h`** - StringConvert 4개 함수 전면 교체 (~250줄)
-   - 커스텀 UTF-8 인코딩/디코딩 구현
-   - `std::wstring_convert` 제거 (deprecated)
-   - Windows API (`MultiByteToWideChar`/`WideCharToMultiByte`) 제거
-   - `dest_size_in_characters` 기본값 `-1` 제거 → 필수 파라미터
-   - surrogate pair 처리 (U+10000 이상 문자)
-
-2. **`GraphicsDevice_DX12.cpp`** - 호출부 수정
-   ```cpp
-   // 변경 전 - 버퍼 오버플로우 위험
-   vz::helper::StringConvert(name, text)
-
-   // 변경 후 - 크기 명시
-   vz::helper::StringConvert(name, text, arraysize(text))
-   ```
-   - `EventBegin()` (line 7996)
-   - `SetMarker()` (line 8014)
-
-**수정 효과**:
-- 버퍼 오버플로우 취약점 제거
-- Dangling pointer UB 버그 수정
-- C++17 deprecated API 제거
-- 크로스 플랫폼 결정론적 동작 보장
+**VizMotive 적용 완료** (2026-01-27)
+- `Helpers.h`: StringConvert 4개 함수 전면 교체 (~250줄)
+- `GraphicsDevice_DX12.cpp`: 호출부에 크기 파라미터 추가
 
 ---
 
-## #14. `96f267e1` - improved shadow bias
+## #14. `96f267e1` - improved shadow bias ⏭️ 미적용 (향후 검토)
 **날짜**: 2025-05-24 | **카테고리**: 렌더링 | **우선순위**: 낮음
 
-**DX12 변경**: PSO 스트림에 Flags 필드 추가
-```cpp
-struct PSO_STREAM1 {
-    CD3DX12_PIPELINE_STATE_STREAM_FLAGS Flags;  // 새로 추가
-};
-// D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS는 Windows 10에서 미작동
-```
+### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/14_96f267e1_dynamic_depth_bias.md)
 
-**VizMotive**: `PSO_STREAM1`에 `Flags` 필드 없음 → Win11 dynamic depth bias 사용시 필요
+**요약**: Dynamic Depth Bias 지원을 위한 PSO Flags 필드 추가
+- **Dynamic Depth Bias**: 런타임에 depth bias 변경 가능 (PSO 재생성 없이)
+- **장점**: PSO 폭발 방지, FLOAT 타입 정밀도, 유연한 섀도우 품질 조정
+- **요구사항**: Agility SDK 1.608.0+, ID3D12GraphicsCommandList9
+- **Wicked Engine**: Flags 필드만 추가, 실제 사용 안 함
 
-#### VizMotive 스킵 ⏭️
-
-**분석 일자**: 2026-01-27
-
-**이유**:
-- PSO_STREAM1::Flags는 Win10에서 미작동 (주석 처리됨)
-- 셰이더 bias 튜닝값은 프로젝트별 조정 필요
-- slope_scaled_depth_bias 값 변경은 그림자 품질 튜닝
+**VizMotive 미적용** (향후 검토)
+- Static depth bias로 충분히 동작
+- 섀도우 품질 개선 필요 시 적용 검토
 
 ---
 
@@ -433,62 +354,33 @@ struct PSO_STREAM1 {
 ## #16. `df69a706` - dx12 root signature desc life extender ✅ 적용 완료
 **날짜**: 2025-06-14 | **카테고리**: 안정성 | **우선순위**: 높음
 
-**문제**: PSO가 rootsig_desc 포인터를 쉐이더에서 복사 → 쉐이더 먼저 삭제시 dangling pointer
+### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/16_df69a706_rootsig_lifetime_extender.md)
 
-**해결**:
-```cpp
-// PipelineState_DX12에 추가
-std::shared_ptr<void> rootsig_desc_lifetime_extender;
+**요약**: Dangling Pointer 방지를 위한 메모리 수명 연장
+- **문제**: PSO가 셰이더의 `rootsig_desc` 포인터를 복사 → 셰이더 먼저 삭제 시 dangling pointer
+- **원인**: `rootsig_desc`는 셰이더의 `rootsig_deserializer`가 소유한 메모리를 가리킴
+- **해결**: `shared_ptr<void>`로 셰이더 internal_state 참조 → 메모리 수명 연장
+- **효과**: 셰이더 핫리로드/정리 시 크래시 방지
 
-// PSO 생성시
-internal_state->rootsig_desc_lifetime_extender = pso->desc.vs->internal_state;
-```
-
-#### VizMotive 적용 완료 ✅
-
-**적용 일자**: 2026-01-27
-
-**적용 내용** (`GraphicsDevice_DX12.cpp`):
-
-1. **PSO internal_state에 필드 추가** (line 1431):
-   ```cpp
-   std::shared_ptr<void> rootsig_desc_lifetime_extender;
-   ```
-
-2. **각 셰이더 타입별 lifetime extender 설정**:
-   | 셰이더 | 라인 |
-   |--------|------|
-   | VS | 4109 |
-   | HS | 4121 |
-   | DS | 4133 |
-   | GS | 4145 |
-   | PS | 4157 |
-   | MS | 4170 |
-   | AS | 4182 |
-
-**수정 효과**:
-- 셰이더가 PSO보다 먼저 해제되어도 rootsig_desc 유효
-- 셰이더 리로드/핫리로드 시 크래시 방지
+**VizMotive 적용 완료** (2026-01-27)
+- `PipelineState_DX12`에 `rootsig_desc_lifetime_extender` 필드 추가
+- VS, HS, DS, GS, PS, MS, AS 각 셰이더별 lifetime extender 설정
 
 ---
 
 ## #17. `6c973af6` - block compressed texture saving fix ✅ 적용 완료
 **날짜**: 2025-06-28 | **카테고리**: 버그수정 | **우선순위**: 중간
 
-**문제**: BC 텍스처 크기가 블록 크기의 배수가 아닐 때 블록 수 계산 오류
+### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_1/17_6c973af6_bc_texture_block_calculation.md)
 
-```cpp
-// 변경 전 - 잘못된 계산 (100/4 = 25)
-const uint32_t num_blocks_x = desc.width / pixels_per_block;
+**요약**: BC 텍스처 mip 레벨별 블록 수 계산 버그 수정
+- **문제**: mip 0 블록 수를 shift하는 방식 → 나머지 픽셀 누락
+- **해결**: 각 mip에서 픽셀 크기 계산 → ceiling division으로 블록 수 계산
+- **핵심 공식**: `num_blocks = (mip_pixels + block_size - 1) / block_size`
+- **증상**: 텍스처 저장 시 하위 mip 데이터 누락, LOD 전환 시 아티팩트
 
-// 변경 후 - ceiling division ((100+3)/4 = 26)
-const uint32_t num_blocks_x = (mip_width + pixels_per_block - 1) / pixels_per_block;
-```
-
-**VizMotive 적용**: `GBackend.h` - `ComputeTextureMemorySizeInBytes()` 수정
-- 각 mip 레벨에서 `mip_width`, `mip_height` 먼저 계산
-- ceiling division으로 블록 수 계산: `(mip_width + pixels_per_block - 1) / pixels_per_block`
-- 기존 코드는 mip 0에서만 블록 수 계산 후 shift → 잘못된 방식
+**VizMotive 적용 완료** (2026-01-27)
+- `GBackend.h`: `ComputeTextureMemorySizeInBytes()` 함수 수정
 
 ---
 
