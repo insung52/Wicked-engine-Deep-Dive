@@ -457,197 +457,41 @@ WickedEngine은 다음도 함께 삭제:
 
 ---
 
-### #24. `2e823bb2` - region copy support for CPU textures VizMotive 적용 완료 ✅
+### #24. `2e823bb2` - region copy support for CPU textures ✅ 적용 완료
 **날짜**: 2026-01-18 | **카테고리**: 기능 | **우선순위**: 중간
 
-#### 변경 개요
-| 항목 | 내용 |
-|------|------|
-| 수정 파일 | wiGraphics.h, wiGraphicsDevice_DX12.cpp |
-| 핵심 변경 | CPU 텍스처(UPLOAD/READBACK) 복사 시 footprint 기반 위치 지정 지원 |
+#### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_2/24_2e823bb2_cpu_texture_region_copy.md)
 
-#### 배경
-DX12에서 텍스처 복사는 두 가지 방식:
-1. **GPU 텍스처 (DEFAULT)**: subresource index로 위치 지정
-2. **CPU 텍스처 (UPLOAD/READBACK)**: 실제로는 버퍼이므로 footprint로 위치 지정
+**요약**: CPU 텍스처(UPLOAD/READBACK) 복사 시 footprint 기반 위치 지정 지원
+- **문제**: 기존 코드는 모든 경우에 subresource index만 사용 → CPU 텍스처 복사 오류
+- **해결**: 4가지 usage 시나리오별로 올바른 copy location 사용
+  - UPLOAD→DEFAULT: src=footprint, dst=subresource
+  - DEFAULT→READBACK: src=subresource, dst=footprint
+  - DEFAULT→DEFAULT: 양쪽 subresource
+  - CPU→CPU: 양쪽 footprint
+- **헬퍼 함수**: `GetPlaneSlice()`, `ComputeSubresource()` 추가
+- **배경 지식**: Footprint 개념, multi-plane 포맷, subresource 인덱싱
 
-기존 코드는 모든 경우에 subresource index만 사용하여 CPU 텍스처 복사 시 문제 발생.
-
-#### 변경 내용
-
-##### 1. 헬퍼 함수 추가 (wiGraphics.h / GBackend.h)
-```cpp
-// Plane slice 계산 (depth/stencil 분리)
-constexpr uint32_t GetPlaneSlice(ImageAspect aspect)
-{
-    switch (aspect)
-    {
-    case ImageAspect::COLOR:
-    case ImageAspect::DEPTH:
-    case ImageAspect::LUMINANCE:
-        return 0;
-    case ImageAspect::STENCIL:
-    case ImageAspect::CHROMINANCE:
-        return 1;
-    default:
-        break;
-    }
-    return 0;
-}
-
-// Subresource index 계산
-constexpr uint32_t ComputeSubresource(uint32_t mip, uint32_t slice, uint32_t plane,
-    uint32_t mip_count, uint32_t array_size)
-{
-    return mip + slice * mip_count + plane * mip_count * array_size;
-}
-```
-
-##### 2. CopyTexture 함수 수정 (wiGraphicsDevice_DX12.cpp)
-```cpp
-void GraphicsDevice_DX12::CopyTexture(...)
-{
-    const TextureDesc& src_desc = src->GetDesc();
-    const TextureDesc& dst_desc = dst->GetDesc();
-
-    const UINT srcPlane = GetPlaneSlice(src_aspect);
-    const UINT dstPlane = GetPlaneSlice(dst_aspect);
-    const UINT src_subresource = D3D12CalcSubresource(...);
-    const UINT dst_subresource = D3D12CalcSubresource(...);
-
-    CD3DX12_TEXTURE_COPY_LOCATION src_location;
-    CD3DX12_TEXTURE_COPY_LOCATION dst_location;
-
-    if (src_desc.usage == Usage::UPLOAD && dst_desc.usage == Usage::DEFAULT)
-    {
-        // CPU (buffer) -> GPU (texture)
-        src_location = CD3DX12_TEXTURE_COPY_LOCATION(src_res, src_internal->footprints[src_subresource]);
-        dst_location = CD3DX12_TEXTURE_COPY_LOCATION(dst_res, dst_subresource);
-    }
-    else if (src_desc.usage == Usage::DEFAULT && dst_desc.usage == Usage::READBACK)
-    {
-        // GPU (texture) -> CPU (buffer)
-        src_location = CD3DX12_TEXTURE_COPY_LOCATION(src_res, src_subresource);
-        dst_location = CD3DX12_TEXTURE_COPY_LOCATION(dst_res, dst_internal->footprints[dst_subresource]);
-    }
-    else if (src_desc.usage == Usage::DEFAULT && dst_desc.usage == Usage::DEFAULT)
-    {
-        // GPU (texture) -> GPU (texture)
-        src_location = CD3DX12_TEXTURE_COPY_LOCATION(src_res, src_subresource);
-        dst_location = CD3DX12_TEXTURE_COPY_LOCATION(dst_res, dst_subresource);
-    }
-    else
-    {
-        // CPU (buffer) -> CPU (buffer)
-        src_location = CD3DX12_TEXTURE_COPY_LOCATION(src_res, src_internal->footprints[src_subresource]);
-        dst_location = CD3DX12_TEXTURE_COPY_LOCATION(dst_res, dst_internal->footprints[dst_subresource]);
-    }
-    // CopyTextureRegion 호출...
-}
-```
-
-#### 4가지 복사 시나리오
-| 시나리오 | src | dst | src 위치 | dst 위치 |
-|----------|-----|-----|----------|----------|
-| 업로드 | UPLOAD | DEFAULT | footprint | subresource |
-| 리드백 | DEFAULT | READBACK | subresource | footprint |
-| GPU→GPU | DEFAULT | DEFAULT | subresource | subresource |
-| CPU→CPU | UPLOAD/READBACK | UPLOAD/READBACK | footprint | footprint |
-
-#### 추가 개선: GetPlaneSlice 사용
-기존 코드의 단순한 plane 계산:
-```cpp
-// 변경 전 - STENCIL만 처리
-UINT srcPlane = src_aspect == ImageAspect::STENCIL ? 1 : 0;
-
-// 변경 후 - 더 많은 aspect 처리
-const UINT srcPlane = GetPlaneSlice(src_aspect);
-```
-
-#### VizMotive 적용 완료 ✅
-**적용 일자**: 2026-01-29
-
-| 파일 | 변경 내용 |
-|------|----------|
-| GBackend.h | `GetPlaneSlice()` 헬퍼 함수 추가 |
-| GBackend.h | `ComputeSubresource()` 헬퍼 함수 추가 |
-| GraphicsDevice_DX12.cpp | `CopyTexture()` 4가지 usage 시나리오 처리 |
-| GraphicsDevice_DX12.cpp | footprint 기반 copy location 지원 |
+**VizMotive 적용 완료** (2026-01-29)
+- `GBackend.h`: GetPlaneSlice(), ComputeSubresource() 추가
+- `GraphicsDevice_DX12.cpp`: CopyTexture() 4가지 시나리오 처리
 
 ---
 
-### #25. `24824a1c` - texture upload improvements VizMotive 적용 완료 ✅
+### #25. `24824a1c` - texture upload improvements ✅ 적용 완료
 **날짜**: 2026-01-24 | **카테고리**: 최적화 | **우선순위**: 낮음
 
-#### 변경 개요
-| 항목 | 내용 |
-|------|------|
-| 수정 파일 | wiGraphics.h, wiGraphicsDevice_DX12.cpp |
-| 핵심 변경 | 텍스처 헬퍼 함수 추가 + CreateTexture 코드 정리 |
+#### [상세 분석 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/dx_2/25_24824a1c_texture_upload_improvements.md)
 
-#### 변경 내용
+**요약**: 텍스처 관련 헬퍼 함수 추가 + CreateTexture 코드 정리
+- **헬퍼 함수**: `GetMipCount(TextureDesc)`, `GetTextureSubresourceCount()` 추가
+- **개선**: mip_levels 계산을 resource 생성 전으로 이동
+- **효과**: 코드 중복 제거, 가독성 향상, mip_levels=0 자동 처리
+- **스킵**: `CreateTextureSubresourceDatas()` alignment 파라미터 (VizMotive에 함수 없음)
 
-##### 1. 새 헬퍼 함수 추가 (wiGraphics.h / GBackend.h)
-```cpp
-// TextureDesc에서 mip count 계산 (mip_levels=0이면 최대값 반환)
-constexpr uint32_t GetMipCount(const TextureDesc& desc)
-{
-    return desc.mip_levels == 0 ? GetMipCount(desc.width, desc.height, desc.depth) : desc.mip_levels;
-}
-
-// 총 subresource 개수 계산
-constexpr uint32_t GetTextureSubresourceCount(const TextureDesc& desc)
-{
-    const uint32_t mips = GetMipCount(desc);
-    return desc.array_size * mips;
-}
-```
-
-##### 2. CreateTextureSubresourceDatas() alignment 파라미터 (WickedEngine만)
-```cpp
-// GPU별 row pitch 정렬을 위한 alignment 파라미터 추가
-inline void CreateTextureSubresourceDatas(const TextureDesc& desc, void* data_ptr,
-    wi::vector<SubresourceData>& subresource_datas, uint32_t alignment = 1)
-{
-    // ...
-    subresource_data.row_pitch = align((uint32_t)num_blocks_x * bytes_per_block, alignment);
-    // ...
-}
-```
-VizMotive에는 이 함수가 없으므로 스킵.
-
-##### 3. DX12 CreateTexture 코드 정리
-```cpp
-// 변경 전 - mip_levels 계산이 늦게 수행됨
-resourcedesc.MipLevels = desc->mip_levels;  // 원본 값 사용
-// ... 중간 코드 ...
-if (texture->desc.mip_levels == 0) {
-    texture->desc.mip_levels = GetMipCount(width, height, depth);
-}
-internal_state->footprints.resize(desc->array_size * std::max(1u, desc->mip_levels));
-
-// 변경 후 - mip_levels 먼저 계산
-texture->desc.mip_levels = GetMipCount(texture->desc);  // 먼저 계산
-resourcedesc.MipLevels = texture->desc.mip_levels;      // 계산된 값 사용
-// ...
-internal_state->footprints.resize(GetTextureSubresourceCount(texture->desc));
-```
-
-#### 개선점
-- 코드 중복 제거 (mip_levels 계산 로직)
-- 일관성 향상 (모든 곳에서 동일한 헬퍼 함수 사용)
-- 가독성 향상
-
-#### VizMotive 적용 완료 ✅
-**적용 일자**: 2026-01-29
-
-| 파일 | 변경 내용 |
-|------|----------|
-| GBackend.h | `GetMipCount(const TextureDesc&)` 오버로드 추가 |
-| GBackend.h | `GetTextureSubresourceCount(const TextureDesc&)` 추가 |
-| GBackend.h | `ComputeTextureMemorySizeInBytes()`에서 `GetMipCount(desc)` 사용 |
-| GraphicsDevice_DX12.cpp | mip_levels 계산을 resource 생성 전으로 이동 |
-| GraphicsDevice_DX12.cpp | `footprints.resize()`에서 `GetTextureSubresourceCount()` 사용 |
+**VizMotive 적용 완료** (2026-01-29)
+- `GBackend.h`: GetMipCount(), GetTextureSubresourceCount() 추가
+- `GraphicsDevice_DX12.cpp`: mip_levels 계산 시점 변경, 헬퍼 함수 사용
 
 ---
 
