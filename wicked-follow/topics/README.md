@@ -14,13 +14,13 @@ Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이�
 
 | 주제 | 설명 | 관련 커밋 수 |
 |------|------|-------------|
-| [Frame Fence & Sync](topic_frame_fence_sync.md) | 프레임 펜스 동기화 진화 과정 | 4개 |
-| [CopyAllocator](topic_copy_allocator.md) | CPU→GPU 복사 시스템 개선 | 3개 |
-| [Custom Allocator & shared_ptr](topic_allocator_shared_ptr.md) | Block Allocator 기반 커스텀 shared_ptr | 11개 |
-| [Texture Operations](topic_texture.md) | 텍스처 생성/복사/관리 | 5개 |
-| [PSO & Root Signature](topic_pso_rootsig.md) | 파이프라인 상태 객체 관련 | 4개 |
-| [Struct Optimization](topic_struct_optimization.md) | 구조체 메모리 최적화 | 2개 |
-| [Bug Fixes & Stability](topic_bug_fixes.md) | 개별 버그 수정 | 7개 |
+| [Frame Fence & Sync](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_frame_fence_sync.md) | 프레임 펜스 동기화 진화 과정 | 4개 |
+| [CopyAllocator](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_copy_allocator.md) | CPU→GPU 복사 시스템 개선 | 3개 |
+| [Custom Allocator & shared_ptr](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_allocator_shared_ptr.md) | Block Allocator 기반 커스텀 shared_ptr | 11개 |
+| [Texture Operations](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | 텍스처 생성/복사/관리 | 5개 |
+| [PSO & Root Signature](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | 파이프라인 상태 객체 관련 | 4개 |
+| [Struct Optimization](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | 구조체 메모리 최적화 | 2개 |
+| [Bug Fixes & Stability](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | 개별 버그 수정 | 7개 |
 
 ---
 
@@ -108,7 +108,7 @@ Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이�
 |------|------|------|
 | dx1 #10 `30917c9e` | 2025-04-28 | 256MB 블록 서브할당 |
 
-별도 문서: [suballocation_withoutWarning.md](../suballocation_withoutWarning.md)
+별도 문서: [suballocation_withoutWarning.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/suballocation_withoutWarning.md)
 
 ---
 
