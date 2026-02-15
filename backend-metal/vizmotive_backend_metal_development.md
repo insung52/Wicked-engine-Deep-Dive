@@ -1,5 +1,7 @@
 # VizMotive Metal Backend 구현 문서
 
+![alt text](image.png)
+
 ## 개요
 
 VizMotive 엔진에 macOS Metal 그래픽스 백엔드를 추가하는 작업의 구현 문서입니다.
@@ -1469,6 +1471,8 @@ ThirdParty/stb_impl.cpp  # STB 구현 분리
 ---
 
 ## Phase 7: MetalSample001 - 고수준 API 테스트 (✅ 완료)
+
+![alt text](image.png)
 
 ### 목표
 Windows용 Sample001과 동일한 vzm:: 고수준 API를 사용하여 macOS에서 렌더링 테스트.
