@@ -8,6 +8,8 @@ VizMotive 엔진에 macOS Metal 그래픽스 백엔드를 추가하는 작업의
 
 ---
 
+**[초기 개발 계획 및 클래스 구현 관련 내용 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/backend-metal/vizmotive_backend_metal_init.md)**
+
 ## Phase 1: Metal 백엔드 기본 구조 및 SPIRV-Cross 통합
 
 ### 목표
