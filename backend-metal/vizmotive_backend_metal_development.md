@@ -1364,7 +1364,7 @@ bool Render(const float dt) override
 
 ---
 
-### Phase 6: 실제 지오메트리 버퍼 바인딩 (✅ 완료)
+## Phase 6: 실제 지오메트리 버퍼 바인딩 (✅ 완료)
 
 Phase 5B에서 Scene 순회 구조를 구현했으므로, Phase 6에서는 실제 GPU 버퍼를 바인딩하여 메쉬 렌더링을 완성했습니다.
 
