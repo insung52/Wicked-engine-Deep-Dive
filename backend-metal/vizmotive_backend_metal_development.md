@@ -1,10 +1,14 @@
 # VizMotive Metal Backend 구현 문서
 
+![alt text](image.png)
+
 ## 개요
 
 VizMotive 엔진에 macOS Metal 그래픽스 백엔드를 추가하는 작업의 구현 문서입니다.
 
 ---
+
+**[초기 개발 계획 및 클래스 구현 관련 내용 문서](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/backend-metal/vizmotive_backend_metal_init.md)**
 
 ## Phase 1: Metal 백엔드 기본 구조 및 SPIRV-Cross 통합
 
@@ -967,8 +971,9 @@ Phase 4까지 엔진 통합은 완료되었지만, ShaderEngineMetal의 `Render(
 |------|------|------|
 | Phase 5A | 하드코딩된 삼각형 렌더링 | ✅ 완료 |
 | Phase 5B | Scene 기반 메쉬 렌더링 인프라 | ✅ 완료 |
+| Phase 6 | 실제 지오메트리 버퍼 바인딩 | ✅ 완료 |
 
-**왜 2단계로 나누었는가?**
+**왜 단계별로 나누었는가?**
 - Phase 5A: 파이프라인이 제대로 동작하는지 간단한 삼각형으로 검증
 - Phase 5B: 카메라/인스턴스 상수버퍼, Scene 렌더러블 순회 구조 구현
 
@@ -1359,9 +1364,84 @@ bool Render(const float dt) override
 - ✅ Scene 렌더러블 순회 구조
 - ✅ 머티리얼 색상 적용
 
-**다음 단계 (Phase 6):**
-1. GPUBuffer에서 실제 Metal 버퍼 접근
-2. 정점/인덱스 버퍼 바인딩
+---
+
+## Phase 6: 실제 지오메트리 버퍼 바인딩 (✅ 완료)
+
+Phase 5B에서 Scene 순회 구조를 구현했으므로, Phase 6에서는 실제 GPU 버퍼를 바인딩하여 메쉬 렌더링을 완성했습니다.
+
+#### 1. GraphicsDevice_Metal 헬퍼 함수 추가
+
+```cpp
+// GraphicsDevice_Metal.h
+void* GetMTLBuffer(const GPUBuffer* buffer) const;
+void* GetMTLTexture(const Texture* texture) const;
+```
+
+```cpp
+// GraphicsDevice_Metal.mm
+void* GraphicsDevice_Metal::GetMTLBuffer(const GPUBuffer* buffer) const
+{
+    if (!buffer || !buffer->internal_state)
+        return nullptr;
+    auto* internal = static_cast<Resource_Metal*>(buffer->internal_state.get());
+    return (__bridge void*)internal->buffer;
+}
+
+void* GraphicsDevice_Metal::GetMTLTexture(const Texture* texture) const
+{
+    if (!texture || !texture->internal_state)
+        return nullptr;
+    auto* internal = static_cast<Texture_Metal*>(texture->internal_state.get());
+    return (__bridge void*)internal->texture;
+}
+```
+
+#### 2. ShaderEngineMetal Render() 지오메트리 바인딩
+
+```objc
+// Get Metal buffer from GPUBuffer
+void* mtlBufferPtr = metalDevice->GetMTLBuffer(&primBuffers->generalBuffer);
+id<MTLBuffer> geometryBuffer = (__bridge id<MTLBuffer>)mtlBufferPtr;
+
+// Bind vertex buffer (positions) at slot 0
+[encoder setVertexBuffer:geometryBuffer
+                  offset:primBuffers->vbPosW.offset
+                 atIndex:0];
+
+// Get index count and format
+const auto* primitive = geom->GetPrimitive(partIdx);
+size_t indexCount = primitive->GetNumIndices();
+MTLIndexType indexType = (geom->GetIndexStride(partIdx) == sizeof(uint32_t))
+    ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
+
+// Draw indexed primitives
+[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                    indexCount:indexCount
+                     indexType:indexType
+                   indexBuffer:geometryBuffer
+             indexBufferOffset:primBuffers->ib.offset];
+```
+
+#### 3. 빌드 시스템 수정
+
+VizEngineCore stb 라이브러리 링크 오류 수정:
+```cmake
+# CMakeLists.txt - stb_impl.cpp 추가
+ThirdParty/stb_impl.cpp  # STB 구현 분리
+```
+
+#### 4. 현재 한계점
+
+**구현 완료:**
+- ✅ GPUBuffer → MTLBuffer 접근
+- ✅ 정점 버퍼 바인딩 (positions)
+- ✅ 인덱스 버퍼 바인딩
+- ✅ drawIndexedPrimitives 호출
+
+**다음 단계 (Phase 7):**
+1. Scene + Camera 테스트 환경 구축
+2. 노말/UV 버퍼 바인딩
 3. 텍스처 바인딩
 4. 전체 Forward 렌더링 파이프라인
 
@@ -1377,7 +1457,8 @@ bool Render(const float dt) override
 | Phase 4 | 셰이더 엔진 모듈 통합 | ✅ 완료 |
 | Phase 5A | 하드코딩된 삼각형 렌더링 | ✅ 완료 |
 | Phase 5B | Scene 기반 메쉬 렌더링 인프라 | ✅ 완료 |
-| Phase 6 | 실제 지오메트리 버퍼 바인딩 | ⏳ 다음 단계 |
+| Phase 6 | 실제 지오메트리 버퍼 바인딩 | ✅ 완료 |
+| Phase 7 | Scene + Camera 테스트 환경 | ⏳ 다음 단계 |
 
 **완성된 라이브러리:**
 - `libVizEngineCore.dylib` (~4.3MB) - 엔진 코어
@@ -1387,3 +1468,284 @@ bool Render(const float dt) override
 **테스트 앱:**
 - `MetalTriangleSample.app` - GBackendMetal 직접 사용 테스트
 - `TestShaderEngineMetal.app` - ShaderEngineMetal 통합 테스트
+- `MetalSample001.app` - vzm:: 고수준 API 테스트
+
+---
+
+## Phase 7: MetalSample001 - 고수준 API 테스트 (✅ 완료)
+
+![alt text](image.png)
+
+### 목표
+Windows용 Sample001과 동일한 vzm:: 고수준 API를 사용하여 macOS에서 렌더링 테스트.
+
+### 아키텍처
+
+기존 테스트 앱들과 달리, MetalSample001은 엔진의 고수준 API를 사용합니다:
+
+```
+MetalTriangleSample    → GBackendMetal 직접 사용
+TestShaderEngineMetal  → ShaderEngineMetal + GBackendMetal
+MetalSample001         → VizEngineCore (vzm::) → ShaderEngineMetal → GBackendMetal
+```
+
+### 구현 파일
+
+#### Examples/MetalSample001/main.mm
+
+```objc
+// VizMotive High-level APIs (same as Windows samples)
+#include "HighAPIs/VzEngineAPIs.h"
+
+@implementation AppDelegate
+
+- (void)initializeEngine
+{
+    // Initialize engine library with Metal backend
+    vzm::ParamMap<std::string> arguments;
+    arguments.SetString("API", "METAL");  // ← Metal 백엔드 지정
+    vzm::InitEngineLib(arguments);
+
+    // Create Scene
+    _scene = vzm::NewScene("MetalSample001 Scene");
+
+    // Create Renderer with canvas
+    _renderer = vzm::NewRenderer("MetalSample001 Renderer");
+    _renderer->SetCanvas(width, height, dpi, (__bridge void*)self.metalView);
+    _renderer->SetClearColor({0.1f, 0.1f, 0.2f, 1.0f});
+
+    // Create Camera
+    _camera = vzm::NewCamera("Main Camera");
+    vfloat3 eyePos = {0.0f, 0.0f, 5.0f};
+    vfloat3 lookAt = {0.0f, 0.0f, -1.0f};
+    vfloat3 upVec = {0.0f, 1.0f, 0.0f};
+    _camera->SetWorldPose(eyePos, lookAt, upVec);
+    _camera->SetPerspectiveProjection(0.1f, 100.0f, 45.0f, aspectRatio);
+
+    // Create Geometry (test triangle)
+    _geometry = vzm::NewGeometry("Test Geometry");
+    _geometry->MakeTestTriangle();
+
+    // Create Material
+    _material = vzm::NewMaterial("Test Material");
+    _material->SetShaderType(vzm::ShaderType::PBR);
+    _material->SetBaseColor({0.8f, 0.2f, 0.2f, 1.0f});
+
+    // Create Actor (mesh instance)
+    _actor = vzm::NewActorStaticMesh("Test Actor", _geometry->GetVID(), _material->GetVID());
+
+    // Create Light
+    _light = vzm::NewLight("Main Light");
+    _light->SetIntensity(5.0f);
+    _light->SetPosition({3.0f, 3.0f, 3.0f});
+
+    // Add components to scene
+    vzm::AppendSceneCompTo(_actor, _scene);
+    vzm::AppendSceneCompTo(_light, _scene);
+}
+
+- (void)renderFrame
+{
+    // Rotate the actor
+    _rotationAngle += 0.5f;
+    vfloat3 rotation = {0.0f, _rotationAngle, 0.0f};
+    _actor->SetEulerAngleZXYInDegree(rotation);
+
+    // Render frame
+    _renderer->Render(_scene, _camera, dt);
+}
+
+- (void)windowWillClose:(NSNotification*)notification
+{
+    // Prevent double cleanup (terminate: triggers another windowWillClose)
+    static bool cleanupDone = false;
+    if (cleanupDone) return;
+    cleanupDone = true;
+
+    // Remove components
+    vzm::RemoveComponent(_actor);
+    vzm::RemoveComponent(_light);
+    // ... etc
+
+    vzm::DeinitEngineLib();
+}
+
+@end
+```
+
+### 해결된 이슈들
+
+#### 1. Graphics API 지정
+```cpp
+// 기본값은 DX12이므로 Metal을 명시적으로 지정해야 함
+vzm::ParamMap<std::string> arguments;
+arguments.SetString("API", "METAL");
+vzm::InitEngineLib(arguments);
+```
+
+#### 2. 픽셀 포맷 불일치
+```
+failed assertion: render pipeline's pixelFormat (MTLPixelFormatBGRA8Unorm)
+does not match framebuffer's pixelFormat (MTLPixelFormatRGB10A2Unorm)
+```
+
+**원인:**
+- 엔진은 `Format::R10G10B10A2_UNORM` (HDR 지원) 사용
+- 기존 코드는 `MTLPixelFormatBGRA8Unorm` 하드코딩
+
+**해결:**
+```objc
+// MetalView CAMetalLayer
+self.metalLayer.pixelFormat = MTLPixelFormatRGB10A2Unorm;
+
+// ShaderEngineMetal 파이프라인
+pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGB10A2Unorm;
+```
+
+#### 3. VolumeComponent::IsValidVolume 링크 오류
+```
+Undefined symbol: vz::VolumeComponent::IsValidVolume() const
+```
+
+**원인:** 헤더에 `inline` 선언, .cpp에 구현 → 심볼 미생성
+
+**해결:**
+```cpp
+// Components.h
+bool IsValidVolume() const;  // inline 키워드 제거
+```
+
+#### 4. windowWillClose 중복 호출 크래시
+```
+EXC_BAD_ACCESS at VzEngineManager.cpp:1208 (DeinitEngineLib)
+```
+
+**원인:**
+1. 창 닫기 → `windowWillClose:` 호출
+2. `[NSApp terminate:nil]` 호출
+3. terminate가 다시 모든 창을 닫으면서 `windowWillClose:` 재호출
+4. `DeinitEngineLib()` 두 번째 호출 → 이미 해제된 리소스 접근
+
+**해결:**
+```objc
+- (void)windowWillClose:(NSNotification*)notification
+{
+    // Prevent double cleanup
+    static bool cleanupDone = false;
+    if (cleanupDone) return;
+    cleanupDone = true;
+
+    // Cleanup...
+    vzm::DeinitEngineLib();
+
+    // Don't call [NSApp terminate:nil] here!
+    // applicationShouldTerminateAfterLastWindowClosed returns YES
+}
+```
+
+### CMakeLists.txt 추가
+
+```cmake
+# MetalSample001 - High-level API test using vzm:: APIs
+add_executable(MetalSample001
+    ${CMAKE_SOURCE_DIR}/../Examples/MetalSample001/main.mm
+)
+
+target_include_directories(MetalSample001 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/Utils/DirectXMath
+    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty
+    ${CMAKE_SOURCE_DIR}/../Examples  # GLM
+)
+
+target_link_libraries(MetalSample001 PRIVATE
+    VizEngineCore
+    GBackendMetal
+    ShaderEngineMetal
+    ${APPKIT_FRAMEWORK}
+    ${METAL_FRAMEWORK}
+    ${QUARTZCORE_FRAMEWORK}
+)
+
+# Copy dylibs to app bundle
+add_custom_command(TARGET MetalSample001 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DYLIB_DIR}/libVizEngineCore.dylib"
+        "$<TARGET_BUNDLE_CONTENT_DIR:MetalSample001>/MacOS/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DYLIB_DIR}/libGBackendMetal.dylib"
+        "$<TARGET_BUNDLE_CONTENT_DIR:MetalSample001>/MacOS/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DYLIB_DIR}/libShaderEngineMetal.dylib"
+        "$<TARGET_BUNDLE_CONTENT_DIR:MetalSample001>/MacOS/"
+)
+```
+
+### 테스트 결과
+
+```
+Initializing VizMotive Engine...
+[info] Engine API's thread is assigned to thread ID (0)
+Metal device initialized: Apple M3
+[info] [Metal] ShaderEngineMetal initialized with device: Apple M3
+[info] [initializer] Initializing Engine, please wait...
+[info] vz::jobsystem Initialized with 8 cores
+Engine library initialized
+Scene created: MetalSample001 Scene
+[info] [Metal] Renderer initialized successfully
+Renderer created: 800x600
+Camera created and configured
+Geometry created: triangle with 3 parts
+Material created: PBR with red base color
+Actor created
+Light created
+Components added to scene
+VizMotive Engine initialization complete!
+[info] [Metal] Simple triangle pipeline initialized successfully
+[info] [Metal] Mesh rendering pipelines initialized successfully
+...
+Cleaning up VizMotive Engine...
+[info] Safely Engine Finished!
+Cleanup complete
+```
+
+| 항목 | 결과 |
+|------|------|
+| vzm:: API 초기화 | ✅ 성공 |
+| Metal 백엔드 로드 | ✅ 성공 |
+| Scene/Camera/Actor 생성 | ✅ 성공 |
+| 렌더링 | ✅ 성공 |
+| 정상 종료 | ✅ 성공 |
+
+### 변경 파일 요약
+
+| 파일 | 변경 유형 | 설명 |
+|------|----------|------|
+| `Examples/MetalSample001/main.mm` | 신규 | vzm:: API 사용 macOS 샘플 |
+| `EngineCore/CMakeLists.txt` | 수정 | MetalSample001 빌드 타겟 추가 |
+| `EngineCore/Components/Components.h` | 수정 | IsValidVolume inline 제거 |
+| `ShaderEngineMetal/ShaderEngineMetal.mm` | 수정 | RGB10A2Unorm 픽셀 포맷 |
+| `GraphicsDevice_Metal.mm` | 수정 | WaitForGPU null 체크 |
+| `HighAPIs/VzEngineManager.cpp` | 수정 | graphicsDevice null 체크 |
+
+---
+
+## 현재 상태 요약
+
+| Phase | 내용 | 상태 |
+|-------|------|------|
+| Phase 1 | Metal 백엔드 기본 구조, SPIRV-Cross 통합 | ✅ 완료 |
+| Phase 2 | EngineCore macOS 빌드, 크로스 플랫폼 호환성 | ✅ 완료 |
+| Phase 3 | Metal 백엔드 핵심 기능 (리소스, 커맨드, 드로우) | ✅ 완료 |
+| Phase 4 | 셰이더 엔진 모듈 통합 | ✅ 완료 |
+| Phase 5A | 하드코딩된 삼각형 렌더링 | ✅ 완료 |
+| Phase 5B | Scene 기반 메쉬 렌더링 인프라 | ✅ 완료 |
+| Phase 6 | 실제 지오메트리 버퍼 바인딩 | ✅ 완료 |
+| Phase 7 | MetalSample001 고수준 API 테스트 | ✅ 완료 |
+
+**다음 단계 (Phase 8):**
+1. "Not Renderable" 경고 해결 (Parts/Materials 개수 불일치)
+2. 노말/UV 버퍼 바인딩
+3. 텍스처 바인딩
+4. 전체 Forward 렌더링 파이프라인
+    
