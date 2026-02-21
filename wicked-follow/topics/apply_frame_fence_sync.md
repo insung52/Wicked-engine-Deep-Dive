@@ -1,22 +1,22 @@
 # VizMotive 적용: Frame Fence 동기화 단순화
 
-## 개요
+# 개요
 
 WickedEngine의 frame fence 진화 과정(topic_frame_fence_sync.md)을 참고하여,
 VizMotive의 fence 구조를 **최종 단순화 형태**(커밋 #21 기반)로 직접 수정한 기록.
 
 ---
 
-## 변경 전 상태 (VizMotive 원본)
+# 변경 전 상태 (VizMotive 원본)
 
-### 헤더
+## 헤더
 
 ```cpp
 // GraphicsDevice_DX12.h
 ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];  // fence만 존재, 따로 값 추적 없음
 ```
 
-### 초기화 (생성자)
+## 초기화 (생성자)
 
 ```cpp
 for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
@@ -29,14 +29,14 @@ for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
 }
 ```
 
-### SubmitCommandLists() — Signal
+## SubmitCommandLists() — Signal
 
 ```cpp
 // 고정값 1로 signal
 hr = queue.queue->Signal(frame_fence[GetBufferIndex()][q].Get(), 1);
 ```
 
-### SubmitCommandLists() — CPU wait
+## SubmitCommandLists() — CPU wait
 
 ```cpp
 if (FRAMECOUNT >= BUFFERCOUNT && frame_fence[bufferindex][queue]->GetCompletedValue() < 1)
@@ -46,7 +46,7 @@ if (FRAMECOUNT >= BUFFERCOUNT && frame_fence[bufferindex][queue]->GetCompletedVa
 hr = frame_fence[bufferindex][queue]->Signal(0);  // CPU에서 0으로 리셋
 ```
 
-### 특징
+## 특징
 
 - 0/1 토글 방식
 - GPU-GPU 큐 상호 동기화 없음
@@ -54,9 +54,9 @@ hr = frame_fence[bufferindex][queue]->Signal(0);  // CPU에서 0으로 리셋
 
 ---
 
-## 변경 후 상태 (최종 단순화 적용)
+# 변경 후 상태 (최종 단순화 적용)
 
-### 1. 헤더 변경 (GraphicsDevice_DX12.h:108)
+## 1. 헤더 변경 (GraphicsDevice_DX12.h:108)
 
 ```cpp
 // 추가: 버퍼별 fence 값 추적 (monotonically increasing)
@@ -66,7 +66,7 @@ uint64_t frame_fence_values[BUFFERCOUNT] = {};
 ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];
 ```
 
-### 2. 초기화 (생성자)
+## 2. 초기화 (생성자)
 
 ```cpp
 for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
@@ -79,7 +79,7 @@ for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
 }
 ```
 
-### 3. SubmitCommandLists() 변경
+## 3. SubmitCommandLists() 변경
 
 전체 흐름:
 
@@ -87,13 +87,13 @@ for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
 [1] (new) frame_fence_values[buf]++          프레임당 1번만 증가
 [2] (edit) Signal 루프                        모든 큐에 같은 값으로 signal
 [3] Present
-[4] (new) GPU-GPU 큐 상호 동기화              새로 추가
+[4] (new) cross-queue frame sync                   새로 추가
 [5] descriptorheap SignalGPU
 [6] FRAMECOUNT++
 [7] (edit) CPU wait                           frame_fence_values로 비교, Signal(0) 제거
 ```
 
-#### [1] fence 값 증가 + [2] Signal 루프
+### [1] fence 값 증가 + [2] Signal 루프
 
 ```cpp
 // 프레임당 1번만 증가 (루프 밖)
@@ -114,7 +114,20 @@ for (int q = 0; q < QUEUE_COUNT; ++q)
 }
 ```
 
-#### [4] GPU-GPU 큐 상호 동기화 (새로 추가)
+### [4] Cross-queue frame sync (새로 추가)
+
+> **용어 정의: Frame-level cross-queue fence synchronization**
+>
+> 현재 프레임의 **모든 GPU 큐 작업이 완료된 후에만** 다음 프레임의 GPU 작업이
+> 시작되도록 하는, fence 기반의 큐 간 동기화.
+> (리소스 상태 전환에 사용되는 Resource Barrier와는 별개)
+>
+> 이하 문서에서는 **cross-queue frame sync**로 줄여서 표기.
+>
+> - 일반적 동기화: "A가 끝나면 B를 시작" (의존성 순서 보장)
+> - **cross-queue frame sync: "프레임 N의 모든 GPU 작업이 끝나야 프레임 N+1의 어떤 GPU 작업도 시작 가능"**
+>
+> 즉, 큐 간 부분적 의존성이 아니라 **프레임 단위의 전면 차단**
 
 ```cpp
 // Sync up every queue to every other queue at the end of the frame:
@@ -135,20 +148,16 @@ for (int queue1 = 0; queue1 < QUEUE_COUNT; ++queue1)
 }
 ```
 
-#### + 왜 "프레임 경계 큐 간 동기화"가 필요한가
+#### + 엔진 내 GPU-GPU 동기화 두 종류
 
-> **용어 정리**
->
-> 이 엔진에는 GPU-GPU 동기화가 두 종류 있다:
->
 > | 이름 | 위치 | 용도 |
 > |------|------|------|
 > | **커맨드 리스트 의존성** (Semaphore) | `commandlist.waits/signals` | 같은 프레임 내에서 커맨드 리스트 A→B 실행 순서 보장 |
-> | **프레임 경계 큐 간 동기화** | `SubmitCommandLists()` 끝 | 프레임 N의 **모든 큐**가 끝나야 프레임 N+1의 어떤 큐도 시작 가능 |
+> | **cross-queue frame sync** | `SubmitCommandLists()` 끝 | 프레임 N의 **모든 큐**가 끝나야 프레임 N+1의 어떤 큐도 시작 가능 |
 >
-> 여기서 추가한 것은 **프레임 경계 큐 간 동기화**이다.
+> 여기서 추가한 것은 **cross-queue frame sync**이다.
 
-##### 문제: CPU wait는 "같은 버퍼"만 체크한다
+#### 문제: CPU wait는 "같은 버퍼"만 체크한다
 
 CPU wait 코드를 보면:
 
@@ -176,12 +185,12 @@ for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 BUFFERCOUNT=2이므로, Frame 1 시작 시 buf 1만 확인하고 **buf 0(= Frame 0)은 안 봄**.
 Frame 0의 GPU 작업이 아직 진행 중이어도 CPU는 Frame 1을 제출해버림.
 
-##### DX12 큐 실행 규칙
+#### DX12 큐 실행 규칙
 
 - **같은 큐**: 제출 순서 = 실행 순서 (보장됨)
 - **다른 큐**: 순서 보장 없음 (완전 독립, 병렬 실행)
 
-##### 프레임 경계 큐 간 동기화가 없을 때 — 경쟁 조건 발생
+#### cross-queue frame sync가 없을 때 — 경쟁 조건 발생
 
 ```
 시간 ──────────────────────────────────────────────────────────────────────────▶
@@ -211,7 +220,7 @@ Frame 3 (buf 1):  CPU가 buf 1 체크 → Frame 1 완료 대기 후 제출
 문제: 매 프레임마다 "직전 프레임의 느린 큐"와 "현재 프레임의 빠른 큐"가 겹칠 수 있음
 ```
 
-##### 프레임 경계 큐 간 동기화 추가 후 — 안전
+#### cross-queue frame sync 추가 후 — 안전
 
 ```
 시간 ──────────────────────────────────────────────────────────────────────────▶
@@ -231,18 +240,18 @@ Frame 2 (buf 0):                                                    │
 모든 큐가 끝나야 다음 프레임의 어떤 큐도 시작할 수 없음 → 경쟁 조건 원천 차단
 ```
 
-##### CPU wait vs 프레임 경계 큐 간 동기화 비교
+#### CPU wait vs cross-queue frame sync 비교
 
-| | CPU wait | 프레임 경계 큐 간 동기화 |
+| | CPU wait | cross-queue frame sync |
 |---|---|---|
 | 누가 기다림 | CPU (블로킹) | GPU 큐들 (GPU 내부 대기) |
 | 뭘 기다림 | 같은 버퍼의 이전 사용 (2프레임 전) | 현재 프레임의 모든 다른 큐 |
-| 목적 | CPU가 GPU보다 2프레임 이상 앞서가지 않게 | 프레임 간 큐 오버랩 방지 |
+| 목적 | CPU가 GPU보다 2프레임 이상 앞서가지 않게 | 다음 프레임 시작 전 현재 프레임의 모든 GPU 작업 완료 보장 |
 | 없으면 | 커맨드 리스트 무한 누적 | 직전 프레임의 느린 큐와 현재 프레임의 빠른 큐가 겹침 |
 
 ---
 
-#### [7] CPU wait 변경
+### [7] CPU wait 변경
 
 ```cpp
 const uint32_t bufferindex = GetBufferIndex();
@@ -253,13 +262,77 @@ for (int queue = 0; queue < QUEUE_COUNT; ++queue)
     if (FRAMECOUNT >= BUFFERCOUNT
         && frame_fence[bufferindex][queue]->GetCompletedValue() < frame_fence_values[bufferindex])
     {
+        // Use event-based wait instead of NULL (spin-wait) to avoid CPU busy-looping:
+        //  SetEventOnCompletion registers the fence to signal the event,
+        //  then WaitForSingleObject sleeps the thread.
         hr = frame_fence[bufferindex][queue]->SetEventOnCompletion(
-            frame_fence_values[bufferindex], NULL);
+            frame_fence_values[bufferindex], frameFenceEvent);
         assert(SUCCEEDED(hr));
+        WaitForSingleObject(frameFenceEvent, INFINITE);
     }
     // Signal(0) 제거 — monotonic 증가이므로 리셋 불필요
 }
 ```
+
+---
+
+## SetEventOnCompletion: NULL vs Event 방식
+
+### 변경 이유
+
+`SetEventOnCompletion(value, NULL)`은 내부적으로 **spin-wait(busy loop)** 으로 동작한다.
+fence 값에 도달할 때까지 CPU가 계속 polling하며, 스레드가 코어를 100% 점유한 채 대기한다.
+
+CPU wait는 매 프레임 `SubmitCommandLists()`에서 호출되므로, 이 비효율이 매 프레임 누적된다.
+
+### NULL (spin-wait) vs Event (kernel wait)
+
+```
+[NULL — spin-wait]
+SetEventOnCompletion(value, NULL)  ← 함수가 블로킹, 내부에서 polling
+
+CPU 코어:  [확인][확인][확인][확인][확인][확인][확인][완료!]
+            100% 점유, 다른 스레드가 이 코어를 못 씀
+
+[Event — kernel wait]
+SetEventOnCompletion(value, event) ← 즉시 리턴, GPU에 "끝나면 event signal해줘" 등록
+WaitForSingleObject(event, ...)    ← OS가 스레드를 sleep 상태로 전환
+
+CPU 코어:  [sleep...............................][깨어남!]
+            0% 점유, GPU 인터럽트로 깨어남
+```
+
+| | NULL (spin-wait) | Event (kernel wait) |
+|---|---|---|
+| CPU 점유 | 100% (busy loop) | 0% (sleeping) |
+| 깨어나는 방식 | 매 루프마다 polling | GPU 하드웨어 인터럽트 → OS가 깨움 |
+| 다른 스레드 영향 | 코어 독점 | 코어를 다른 스레드가 사용 가능 |
+
+### 변경 내용
+
+```cpp
+// GraphicsDevice_DX12.h — 선언
+HANDLE frameFenceEvent = NULL;
+
+// 생성자 — frame_fence 생성 직후, 1번만 생성
+frameFenceEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+
+// SubmitCommandLists() CPU wait — NULL을 event로 교체
+fence->SetEventOnCompletion(value, frameFenceEvent);  // 즉시 리턴
+WaitForSingleObject(frameFenceEvent, INFINITE);        // OS가 스레드를 sleep
+
+// 소멸자 — WaitForGPU() 직후
+CloseHandle(frameFenceEvent);
+```
+
+Event는 한 번 생성해서 매 프레임 재사용. auto-reset event이므로 signal 후 자동으로 non-signal 상태로 돌아감.
+
+### 다른 NULL 사용처는 수정 불필요
+
+| 위치 | 함수 | 이유 |
+|------|------|------|
+| 5913줄 | `WaitForGPU()` | 디바이스 소멸/리사이즈 등 드물게 호출. 임시 fence 생성 후 1회 사용. 성능 영향 없음 |
+| 7989줄 | Video decode debug | `#if 0`으로 비활성화된 디버그 코드. 실행 안 됨 |
 
 ---
 
@@ -271,7 +344,7 @@ for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 | 값 추적 | 없음 (고정값 1) | `frame_fence_values[BUFFERCOUNT]` 추가 |
 | Signal 값 | 1 (고정) | monotonic 증가 (1, 2, 3, ...) |
 | CPU 리셋 | `Signal(0)` | 제거 |
-| GPU-GPU 동기화 | 없음 | 큐 상호 Wait 추가 |
+| cross-queue frame sync | 없음 | 큐 상호 Wait 추가 (모든 GPU 작업 완료 후 다음 프레임) |
 | race condition | CPU 리셋 시 가능 | 원천 차단 (리셋 없음) |
 
 ---
@@ -307,6 +380,79 @@ if (fence->GetCompletedValue() < 0)  // 0 < 0? → false!
 ```
 
 `frame_fence_values`는 per-buffer로 1부터 증가하므로 초기값 0과 겹치지 않음.
+
+---
+
+## 왜 버퍼별 fence인가 (ping-pong과 per-buffer fence)
+
+### ping-pong (더블 버퍼링)이란
+
+`BUFFERCOUNT = 2`, `GetBufferIndex() = FRAMECOUNT % 2`.
+CPU와 GPU가 **동시에 다른 프레임을 처리**하기 위해 리소스 슬롯을 2개 번갈아 사용.
+
+```
+Frame 0 → buf 0  (ping)
+Frame 1 → buf 1  (pong)
+Frame 2 → buf 0  (ping)
+Frame 3 → buf 1  (pong)
+
+CPU:  [Frame 0 준비(buf 0)] [Frame 1 준비(buf 1)] [Frame 2 준비(buf 0)] ...
+GPU:                        [Frame 0 실행(buf 0)] [Frame 1 실행(buf 1)] ...
+
+→ CPU가 buf 1을 준비하는 동안 GPU는 buf 0을 실행 중 — 서로 다른 버퍼이므로 충돌 없음
+→ buf 0을 다시 쓰려면(Frame 2) GPU가 Frame 0을 끝낼 때까지 대기 — 이것이 CPU wait
+```
+
+### 질문: 왜 `frame_fence[BUFFERCOUNT][QUEUE_COUNT]`인가?
+
+`frame_fence[QUEUE_COUNT]` (큐당 단일 fence)로는 안 되는가?
+
+#### 변경 전 (0/1 토글) — per-buffer 필수
+
+```cpp
+// submit 시
+queue->Signal(frame_fence[buf][q].Get(), 1);   // fence = 1
+
+// CPU wait 시
+if (fence->GetCompletedValue() < 1) ...         // 1이 될 때까지 대기
+fence->Signal(0);                                // 리셋!
+```
+
+단일 fence라면:
+
+```
+Frame 0 (buf 0): Signal(fence, 1)   → fence = 1
+Frame 1 (buf 1): Signal(fence, 1)   → ??? 이미 1인데 또 1
+                  CPU wait에서 GetCompletedValue() < 1 → false → 대기 안 함!
+                  Signal(0)          → fence = 0 → Frame 0 완료 확인이 리셋됨!
+```
+
+0/1 토글 방식에서는 버퍼별로 독립적인 fence가 없으면 **리셋이 다른 프레임의 완료 정보를 날림**.
+
+#### 변경 후 (monotonic 증가) — 기술적으로 단일 fence 가능
+
+```cpp
+// monotonic 값이므로 리셋 없음, 값이 계속 증가
+// 큐당 단일 fence를 쓴다면:
+Frame 0: Signal(fence[q], 1)
+Frame 1: Signal(fence[q], 2)
+Frame 2: Signal(fence[q], 3)  // CPU wait: GetCompletedValue() < 1? → Frame 0 완료 확인 가능
+```
+
+monotonic 증가 방식에서는 리셋이 없으므로, 이론적으로 큐당 fence 1개로도 동작한다.
+
+#### 그럼에도 per-buffer를 유지한 이유
+
+1. **역사적 구조**: 0/1 토글 시절부터 per-buffer였고, monotonic으로 바꿀 때 fence 배열 구조까지 변경할 필요 없음
+2. **의미적 명확성**: `frame_fence[buf][q]`는 "이 버퍼 슬롯의 이 큐가 끝났는가"를 직관적으로 표현
+3. **cross-queue frame sync 코드의 자연스러움**: 현재 버퍼의 fence들만 Wait하면 되므로 코드가 깔끔
+
+```cpp
+// per-buffer: 현재 버퍼의 fence만 사용 — 명확
+queues[q1].queue->Wait(frame_fence[GetBufferIndex()][q2].Get(), frame_fence_values[GetBufferIndex()]);
+
+// 만약 단일 fence였다면: 별도의 "이번 프레임 signal 값" 관리 필요 — 복잡
+```
 
 ---
 
