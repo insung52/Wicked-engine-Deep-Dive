@@ -36,13 +36,19 @@ fence가 하는 것:
 - 그 시점까지 완료될 때까지 **대기(wait)**
 - 작업 간 **dependency ordering**을 형성
 
+#### 용어 보충
+
+- **큐(queue)**: DX12의 command queue (`ID3D12CommandQueue`). 이 엔진에서는 GRAPHICS, COMPUTE, COPY, VIDEO_DECODE 4종류가 존재.
+- **프레임 완료 지점**: 한 프레임에서 각 큐에 제출된 모든 커맨드 리스트의 실행이 끝난 시점. 코드상으로는 `queue.submit()` 이후 `queue->Signal(fence, value)`로 표시(mark)하는 지점.
+- **프레임 재사용**: 더블 버퍼링(ping-pong)에서 이전 프레임이 사용했던 버퍼 슬롯을 다시 사용하는 것. `BUFFERCOUNT = 2`이므로 2프레임 전의 버퍼를 재사용. (상세: 아래 "왜 BUFFERCOUNT가 1이 아닌가" 섹션 참고)
+
 이 문서에서 fence가 사용되는 세 가지 맥락:
 
 | 맥락 | 구현 | 정확한 설명 |
 |------|------|-------------|
-| CPU wait | `SetEventOnCompletion` + `WaitForSingleObject` | 프레임 재사용을 위한 GPU 완료 확인 — 버퍼를 재사용해도 안전한지 판단 |
-| 큐 간 fence dependency | `queue->Wait(fence, value)` | 큐 간 작업 순서 보장을 위한 fence 기반 dependency — 모든 큐의 현재 프레임 완료 지점에 도달해야 다음 프레임 작업 시작 가능 |
-| Signal | `queue->Signal(fence, value)` | GPU 작업 완료 지점 추적 — 이 큐의 여기까지 실행이 끝나면 fence 값을 기록 |
+| Signal | `queue->Signal(fence, value)` | GPU 작업 완료 지점 추적 — 이 큐에 제출된 현재 프레임의 모든 커맨드 리스트 실행이 끝나면 fence 값을 기록 |
+| 큐 간 fence dependency | `queue->Wait(fence, value)` | 큐 간 작업 순서 보장을 위한 fence 기반 dependency — 모든 큐가 현재 프레임의 완료 지점에 도달해야 다음 프레임 작업 시작 가능 |
+| CPU wait | `SetEventOnCompletion` + `WaitForSingleObject` | 프레임 재사용을 위한 GPU 완료 확인 — 재사용할 버퍼 슬롯의 이전 GPU 작업이 완료되었는지 판단 |
 
 ---
 
@@ -220,6 +226,10 @@ for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 BUFFERCOUNT=2이므로, Frame 1 시작 시 buf 1만 확인하고 **buf 0(= Frame 0)은 안 봄**.
 Frame 0의 GPU 작업이 아직 진행 중이어도 CPU는 Frame 1을 제출해버림.
 
+이 결과, GPU 내부에서 **의도하지 않은 프레임 간 병렬 처리**가 발생한다:
+Frame N의 느린 큐(예: COMPUTE)가 아직 실행 중인데, Frame N+1의 빠른 큐(예: GRAPHICS)가
+이미 시작되어, 서로 다른 프레임의 작업이 서로 다른 큐에서 동시에 실행된다.
+
 #### DX12 큐 실행 규칙
 
 - **같은 큐**: 제출 순서 = 실행 순서 (보장됨)
@@ -241,19 +251,30 @@ Frame 1 (buf 1):  CPU는 buf 1만 체크 → 비어있으니 즉시 제출!
                     Frame 0의 COMPUTE가 아직 GPU에서 실행 중인데
                     Frame 1의 GRAPHICS가 같은 리소스에 접근할 경우 → 경쟁 조건!
 
-Frame 2 (buf 0):  CPU가 buf 0 체크 → Frame 0 완료 대기 후 제출
-  GRAPHICS:                               [██████████████████]
-  COMPUTE:                                             [███████████]
-                                            ↑
-                                         Frame 1의 COMPUTE가 아직 실행 중인데
-                                         Frame 2의 GRAPHICS가 시작 → 또 경쟁 조건!
-
-Frame 3 (buf 1):  CPU가 buf 1 체크 → Frame 1 완료 대기 후 제출
-  GRAPHICS:                                                   [████████]
-  COMPUTE:                                                          [████████]
-
 문제: 매 프레임마다 "직전 프레임의 느린 큐"와 "현재 프레임의 빠른 큐"가 겹칠 수 있음
 ```
+
+#### Worst case: 프레임이 월드 시간 순서대로 완료되지 않는 경우
+
+프레임은 월드 시간 순서로 업데이트되어야 한다 (Frame 5 → Frame 6 → Frame 7 ...).
+하지만 큐 간 fence dependency가 없으면, GPU 내부에서 프레임 완료 순서가 뒤집힐 수 있다:
+
+```
+Frame 5 (buf 1):
+  GRAPHICS:  [████]                                        ← 빨리 끝남
+  COMPUTE:   [██████████████████████████████████████████]   ← 매우 느림 (아직 실행 중!)
+
+Frame 6 (buf 0):  CPU는 buf 0만 체크 → Frame 4 끝났으니 즉시 제출
+  GRAPHICS:            [████████]   ← Frame 5의 COMPUTE보다 먼저 끝남!
+  COMPUTE:                                                 [████████]
+                                                            ↑ 같은 큐이므로 Frame 5 COMPUTE 끝난 후에야 시작
+
+                         ↑
+          Frame 6의 GRAPHICS가 Frame 5의 COMPUTE보다 먼저 완료됨!
+```
+
+Frame 6의 GRAPHICS가 Frame 5의 COMPUTE 결과(예: 물리 시뮬레이션, 파티클 계산)를
+읽어야 하는 경우, 아직 계산이 끝나지 않은 Frame 5의 중간 상태를 읽게 된다.
 
 #### 큐 간 fence dependency 추가 후 — 안전
 
@@ -418,28 +439,54 @@ if (fence->GetCompletedValue() < 0)  // 0 < 0? → false!
 
 ---
 
-## 왜 버퍼별 fence인가 (ping-pong과 per-buffer fence)
+## 왜 BUFFERCOUNT가 1이 아닌가 — 더블 버퍼링의 목적
 
-### ping-pong (더블 버퍼링)이란
+### CPU "준비"와 GPU "실행"의 파이프라이닝
 
-`BUFFERCOUNT = 2`, `GetBufferIndex() = FRAMECOUNT % 2`.
-CPU와 GPU가 **동시에 다른 프레임을 처리**하기 위해 리소스 슬롯을 2개 번갈아 사용.
+BUFFERCOUNT=1 (단일 버퍼)이면, CPU와 GPU가 같은 리소스를 사용하므로:
 
 ```
+[BUFFERCOUNT = 1 — 파이프라이닝 불가]
+
+CPU:  [Frame 0 준비] [대기........] [Frame 1 준비] [대기........] ...
+GPU:                 [Frame 0 실행]                [Frame 1 실행]
+                      ↑                             ↑
+              CPU는 GPU가 끝날 때까지       다시 대기...
+              같은 버퍼를 건드릴 수 없음
+```
+
+CPU가 GPU에 일을 시키기 위해 **준비**하는 작업:
+- 씬 그래프 업데이트 (transform hierarchy)
+- Visibility culling (카메라에서 보이는 오브젝트 판별)
+- 커맨드 리스트 기록 (draw call, dispatch, resource barrier 등)
+- Descriptor/resource binding
+- Shader constant 업데이트
+
+이 준비 작업 동안 GPU는 놀고 있게 된다.
+
+BUFFERCOUNT=2 (더블 버퍼링, ping-pong)이면, CPU의 준비 시간 동안 GPU가 이전 프레임을 실행할 수 있다:
+
+```
+[BUFFERCOUNT = 2 — CPU-GPU 파이프라이닝]
+
 Frame 0 → buf 0  (ping)
 Frame 1 → buf 1  (pong)
 Frame 2 → buf 0  (ping)
-Frame 3 → buf 1  (pong)
 
 CPU:  [Frame 0 준비(buf 0)] [Frame 1 준비(buf 1)] [Frame 2 준비(buf 0)] ...
 GPU:                        [Frame 0 실행(buf 0)] [Frame 1 실행(buf 1)] ...
+                              ↑
+                    CPU가 buf 1로 Frame 1을 준비하는 동안
+                    GPU는 buf 0으로 Frame 0을 실행
+                    → 서로 다른 버퍼이므로 충돌 없음
+                    → CPU 준비 시간이 GPU 실행 시간을 벌어줌
 
-→ CPU가 buf 1을 준비하는 동안 GPU는 buf 0을 실행 중 — 서로 다른 버퍼이므로 충돌 없음
-→ buf 0을 다시 쓰려면(Frame 2) GPU가 Frame 0을 끝낼 때까지 대기 — 이것이 CPU wait
+buf 0을 다시 쓰려면(Frame 2) GPU가 Frame 0을 끝낼 때까지 대기 — 이것이 CPU wait
 ```
 
-### 질문: 왜 `frame_fence[BUFFERCOUNT][QUEUE_COUNT]`인가?
+### 왜 `frame_fence[BUFFERCOUNT][QUEUE_COUNT]`인가?
 
+위에서 BUFFERCOUNT=2인 이유를 확인했다. 그렇다면 fence도 버퍼별로 필요한가?
 `frame_fence[QUEUE_COUNT]` (큐당 단일 fence)로는 안 되는가?
 
 #### 변경 전 (0/1 토글) — per-buffer 필수
