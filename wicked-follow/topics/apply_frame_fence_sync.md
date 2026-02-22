@@ -16,6 +16,8 @@ VizMotive의 fence 구조를 **최종 단순화 형태**(커밋 #21 기반)로 �
 
 DX12의 fence는 **GPU 타임라인의 단조 증가(monotonically increasing) 카운터**이다.
 
+#### 이를 통해 작업 간 dependency ordering을 형성 해 준다.
+
 fence 기반 메커니즘은 "동기화"라기보다는 더 정확하게:
 
 | 표현 | 의미 |
