@@ -7,6 +7,43 @@ VizMotive의 fence 구조를 **최종 단순화 형태**(커밋 #21 기반)로 �
 
 ---
 
+# Fence의 정확한 의미
+
+> **"동기화(synchronization)" ≠ "종료 때까지 기다림"**
+>
+> "종료 때까지 기다림"이 동기화를 **보장해 주는 것은 맞지만**,
+> 동기화가 "종료 때까지 기다림"을 **의미하는 것은 아니다**.
+
+DX12의 fence는 **GPU 타임라인의 단조 증가(monotonically increasing) 카운터**이다.
+
+fence 기반 메커니즘은 "동기화"라기보다는 더 정확하게:
+
+| 표현 | 의미 |
+|------|------|
+| **완료 지점(completion point) 추적** | GPU 작업이 어디까지 끝났는지 fence 값으로 확인 |
+| **의존성(dependency) 보장 메커니즘** | fence 값을 기준으로 "이 작업이 끝나야 다음 작업 시작 가능" |
+| **프레임 재사용을 위한 GPU 완료 확인** | 버퍼를 재사용해도 안전한지 fence 값으로 판단 |
+
+fence 자체는:
+- GPU를 멈추는 것이 **아님**
+- 전체 파이프라인을 flush하는 것이 **아님**
+- 모든 작업을 종료시키는 것이 **아님**
+
+fence가 하는 것:
+- 특정 시점까지 완료되었음을 **표시(signal)**
+- 그 시점까지 완료될 때까지 **대기(wait)**
+- 작업 간 **dependency ordering**을 형성
+
+이 문서에서 fence가 사용되는 세 가지 맥락:
+
+| 맥락 | 구현 | 정확한 설명 |
+|------|------|-------------|
+| CPU wait | `SetEventOnCompletion` + `WaitForSingleObject` | 프레임 재사용을 위한 GPU 완료 확인 — 버퍼를 재사용해도 안전한지 판단 |
+| 큐 간 fence dependency | `queue->Wait(fence, value)` | 큐 간 작업 순서 보장을 위한 fence 기반 dependency — 모든 큐의 현재 프레임 완료 지점에 도달해야 다음 프레임 작업 시작 가능 |
+| Signal | `queue->Signal(fence, value)` | GPU 작업 완료 지점 추적 — 이 큐의 여기까지 실행이 끝나면 fence 값을 기록 |
+
+---
+
 # 변경 전 상태 (VizMotive 원본)
 
 ## 헤더
@@ -49,7 +86,7 @@ hr = frame_fence[bufferindex][queue]->Signal(0);  // CPU에서 0으로 리셋
 ## 특징
 
 - 0/1 토글 방식
-- GPU-GPU 큐 상호 동기화 없음
+- 큐 간 fence dependency 없음
 - topic_frame_fence_sync.md 기준 **1단계 이전** (가장 원시적인 상태)
 
 ---
@@ -87,7 +124,7 @@ for (uint32_t buffer = 0; buffer < BUFFERCOUNT; ++buffer)
 [1] (new) frame_fence_values[buf]++          프레임당 1번만 증가
 [2] (edit) Signal 루프                        모든 큐에 같은 값으로 signal
 [3] Present
-[4] (new) cross-queue frame sync                   새로 추가
+[4] (new) 큐 간 fence dependency 삽입              새로 추가
 [5] descriptorheap SignalGPU
 [6] FRAMECOUNT++
 [7] (edit) CPU wait                           frame_fence_values로 비교, Signal(0) 제거
@@ -114,20 +151,13 @@ for (int q = 0; q < QUEUE_COUNT; ++q)
 }
 ```
 
-### [4] Cross-queue frame sync (새로 추가)
+### [4] 큐 간 작업 순서 보장을 위한 fence 기반 dependency (새로 추가)
 
-> **용어 정의: Frame-level cross-queue fence synchronization**
+> 모든 GPU 큐가 현재 프레임의 **완료 지점(completion point)에 도달해야만**
+> 다음 프레임의 GPU 작업이 시작될 수 있도록 하는, fence 기반 dependency 메커니즘.
 >
-> 현재 프레임의 **모든 GPU 큐 작업이 완료된 후에만** 다음 프레임의 GPU 작업이
-> 시작되도록 하는, fence 기반의 큐 간 동기화.
-> (리소스 상태 전환에 사용되는 Resource Barrier와는 별개)
->
-> 이하 문서에서는 **cross-queue frame sync**로 줄여서 표기.
->
-> - 일반적 동기화: "A가 끝나면 B를 시작" (의존성 순서 보장)
-> - **cross-queue frame sync: "프레임 N의 모든 GPU 작업이 끝나야 프레임 N+1의 어떤 GPU 작업도 시작 가능"**
->
-> 즉, 큐 간 부분적 의존성이 아니라 **프레임 단위의 전면 차단**
+> - 커맨드 리스트 의존성: "큐 내 A 작업이 끝나면 B 시작" (부분적 dependency)
+> - **큐 간 fence dependency: "프레임 N의 모든 큐가 완료 지점에 도달해야 프레임 N+1의 어떤 큐도 작업 시작 가능"** (프레임 단위 dependency)
 
 ```cpp
 // Sync up every queue to every other queue at the end of the frame:
@@ -148,16 +178,19 @@ for (int queue1 = 0; queue1 < QUEUE_COUNT; ++queue1)
 }
 ```
 
-#### + 엔진 내 GPU-GPU 동기화 두 종류
+이 코드의 의미: 각 큐에 "다른 모든 큐의 현재 프레임 완료 지점에 도달할 때까지 대기"하라는 **dependency를 삽입**.
+결과적으로, 모든 큐가 현재 프레임의 완료 지점에 도달해야만 다음 프레임의 어떤 큐도 작업을 시작할 수 없다.
+
+#### + 엔진 내 GPU-GPU fence dependency 두 종류
 
 > | 이름 | 위치 | 용도 |
 > |------|------|------|
-> | **커맨드 리스트 의존성** (Semaphore) | `commandlist.waits/signals` | 같은 프레임 내에서 커맨드 리스트 A→B 실행 순서 보장 |
-> | **cross-queue frame sync** | `SubmitCommandLists()` 끝 | 프레임 N의 **모든 큐**가 끝나야 프레임 N+1의 어떤 큐도 시작 가능 |
+> | **커맨드 리스트 의존성** (Semaphore) | `commandlist.waits/signals` | 같은 프레임 내에서 커맨드 리스트 A→B 순서 보장 (부분적 dependency) |
+> | **큐 간 fence dependency** | `SubmitCommandLists()` 끝 | 프레임 N의 **모든 큐**가 완료 지점에 도달해야 프레임 N+1 시작 가능 (프레임 단위 dependency) |
 >
-> 여기서 추가한 것은 **cross-queue frame sync**이다.
+> 여기서 추가한 것은 **큐 간 fence dependency**이다.
 
-#### 문제: CPU wait는 "같은 버퍼"만 체크한다
+#### 문제: 기존 CPU wait는 "같은 버퍼"만 체크한다
 
 CPU wait 코드를 보면:
 
@@ -190,7 +223,7 @@ Frame 0의 GPU 작업이 아직 진행 중이어도 CPU는 Frame 1을 제출해�
 - **같은 큐**: 제출 순서 = 실행 순서 (보장됨)
 - **다른 큐**: 순서 보장 없음 (완전 독립, 병렬 실행)
 
-#### cross-queue frame sync가 없을 때 — 경쟁 조건 발생
+#### 큐 간 fence dependency가 없을 때 — 경쟁 조건 발생
 
 ```
 시간 ──────────────────────────────────────────────────────────────────────────▶
@@ -220,16 +253,16 @@ Frame 3 (buf 1):  CPU가 buf 1 체크 → Frame 1 완료 대기 후 제출
 문제: 매 프레임마다 "직전 프레임의 느린 큐"와 "현재 프레임의 빠른 큐"가 겹칠 수 있음
 ```
 
-#### cross-queue frame sync 추가 후 — 안전
+#### 큐 간 fence dependency 추가 후 — 안전
 
 ```
 시간 ──────────────────────────────────────────────────────────────────────────▶
 
-Frame 0 (buf 0):                               │ 동기화 지점 (모든 큐 완료)
+Frame 0 (buf 0):                               │ 완료 지점 (모든 큐 완료)
   GRAPHICS:  [████████]                        │
   COMPUTE:   [████████████████████████████████]│
                                                │
-Frame 1 (buf 1):                               │                    │ 동기화 지점
+Frame 1 (buf 1):                               │                    │ 완료 지점
   GRAPHICS:                                    │[████████████████]  │
   COMPUTE:                                     │       [███████████]│
                                                │                    │
@@ -240,9 +273,9 @@ Frame 2 (buf 0):                                                    │
 모든 큐가 끝나야 다음 프레임의 어떤 큐도 시작할 수 없음 → 경쟁 조건 원천 차단
 ```
 
-#### CPU wait vs cross-queue frame sync 비교
+#### CPU wait vs 큐 간 fence dependency 비교
 
-| | CPU wait | cross-queue frame sync |
+| | CPU wait | 큐 간 fence dependency |
 |---|---|---|
 | 누가 기다림 | CPU (블로킹) | GPU 큐들 (GPU 내부 대기) |
 | 뭘 기다림 | 같은 버퍼의 이전 사용 (2프레임 전) | 현재 프레임의 모든 다른 큐 |
@@ -344,7 +377,7 @@ Event는 한 번 생성해서 매 프레임 재사용. auto-reset event이므로
 | 값 추적 | 없음 (고정값 1) | `frame_fence_values[BUFFERCOUNT]` 추가 |
 | Signal 값 | 1 (고정) | monotonic 증가 (1, 2, 3, ...) |
 | CPU 리셋 | `Signal(0)` | 제거 |
-| cross-queue frame sync | 없음 | 큐 상호 Wait 추가 (모든 GPU 작업 완료 후 다음 프레임) |
+| 큐 간 fence dependency | 없음 | 큐 상호 Wait 추가 (모든 GPU 작업 완료 후 다음 프레임) |
 | race condition | CPU 리셋 시 가능 | 원천 차단 (리셋 없음) |
 
 ---
@@ -441,17 +474,44 @@ Frame 2: Signal(fence[q], 3)  // CPU wait: GetCompletedValue() < 1? → Frame 0 
 
 monotonic 증가 방식에서는 리셋이 없으므로, 이론적으로 큐당 fence 1개로도 동작한다.
 
-#### 그럼에도 per-buffer를 유지한 이유
-
-1. **역사적 구조**: 0/1 토글 시절부터 per-buffer였고, monotonic으로 바꿀 때 fence 배열 구조까지 변경할 필요 없음
-2. **의미적 명확성**: `frame_fence[buf][q]`는 "이 버퍼 슬롯의 이 큐가 끝났는가"를 직관적으로 표현
-3. **cross-queue frame sync 코드의 자연스러움**: 현재 버퍼의 fence들만 Wait하면 되므로 코드가 깔끔
+#### 단일 fence로 바꾸면 어떻게 되는가
 
 ```cpp
-// per-buffer: 현재 버퍼의 fence만 사용 — 명확
-queues[q1].queue->Wait(frame_fence[GetBufferIndex()][q2].Get(), frame_fence_values[GetBufferIndex()]);
+// 단일 fence 구조 (가상)
+ComPtr<ID3D12Fence> frame_fence[QUEUE_COUNT];       // 버퍼 차원 없음
+uint64_t global_fence_value = 0;                     // 전역 카운터 1개
+uint64_t buffer_signal_values[BUFFERCOUNT] = {};     // 각 버퍼가 마지막으로 Signal한 값 추적, 관리할 변수가 증가
 
-// 만약 단일 fence였다면: 별도의 "이번 프레임 signal 값" 관리 필요 — 복잡
+// Signal
+global_fence_value++;
+buffer_signal_values[GetBufferIndex()] = global_fence_value;
+queue->Signal(frame_fence[q].Get(), global_fence_value);
+
+// CPU wait — buf 재사용 시
+if (fence->GetCompletedValue() < buffer_signal_values[bufferindex]) ...
+//                                 ↑ 결국 per-buffer 값 추적이 필요함!
+```
+
+기술적으로 동작한다. fence 객체 수는 줄어든다 (`BUFFERCOUNT * QUEUE_COUNT` → `QUEUE_COUNT`).
+하지만 **per-buffer signal 값 추적은 여전히 필요**하고, 오히려 관리할 변수가 늘어난다. (uint64_t buffer_signal_values[BUFFERCOUNT])
+
+#### per-buffer를 유지한 이유
+
+1. **0/1 토글 시절에는 필수**: 리셋이 다른 프레임의 완료 정보를 날리므로 fence 분리가 필수였음. monotonic으로 전환할 때 fence 배열 구조까지 바꿀 이유가 없었음
+2. **fence 자체가 완료 지점 추적 단위**: `frame_fence[buf][q]`는 "이 버퍼 슬롯의 이 큐의 완료 지점"을 그 자체로 표현. 단일 fence에서는 별도의 `buffer_signal_values` 배열로 간접 추적해야 함
+3. **값 관리의 단순함**: per-buffer면 `frame_fence_values[buf]`만으로 Signal과 Wait 양쪽에서 같은 값 사용. 단일 fence면 "이번 프레임에 Signal한 값"과 "이 버퍼의 마지막 Signal 값"을 별도 관리
+
+```cpp
+// per-buffer — fence와 값이 1:1 대응, 직관적
+queue->Signal(frame_fence[buf][q].Get(), frame_fence_values[buf]);
+queue->Wait(frame_fence[buf][q2].Get(), frame_fence_values[buf]);
+fence->GetCompletedValue() < frame_fence_values[buf];
+
+// 단일 fence — 값 관리가 간접적
+queue->Signal(frame_fence[q].Get(), global_fence_value);
+buffer_signal_values[buf] = global_fence_value;              // 추가 추적 필요
+queue->Wait(frame_fence[q].Get(),global_fence_value);
+fence->GetCompletedValue() < buffer_signal_values[buf];
 ```
 
 ---
