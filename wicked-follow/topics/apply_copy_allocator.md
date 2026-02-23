@@ -25,24 +25,85 @@ CPU 메모리에 있는 데이터(텍스처, 버퍼)를 **GPU 메모리(VRAM)로
 
 ## 배경 지식: 큐/커맨드 관련 함수 정리
 
+### 레이어 개요
+
+이 엔진에는 "커맨드 리스트"라는 이름이 두 군데 나온다. 레이어를 먼저 구분한다.
+
+```
+[최상위 — 셰이더 엔진 레벨]
+  CommandList (= 정수 ID)            ← BeginCommandList()로 받는 핸들
+  │  내부적으로 CommandList_DX12 = { allocator[BUFFERCOUNT][QUEUE_COUNT]
+  │                                  commandList[QUEUE_COUNT]
+  │                                  DescriptorBinder, ... }
+  │
+  ├─ WaitCommandList(cmd_A, cmd_B)   ← GPU 실행 순서 보장 (GPU-side)
+  └─ SubmitCommandLists()            ← 프레임 끝에 모든 큐를 GPU에 제출
+
+[중간 — 엔진 DX12 내부]
+  CommandQueue::submit()             ← submit_cmds 모아서 ExecuteCommandLists() 호출
+
+[하위 — DX12 API]
+  ID3D12CommandQueue (GPU Queue)     ← 실제 GPU 실행 파이프라인
+  ID3D12GraphicsCommandList          ← GPU에 전달되는 명령 버퍼
+  ID3D12CommandQueue::ExecuteCommandLists()  ← GPU에 직접 제출
+```
+
 ### ExecuteCommandLists vs SubmitCommandLists vs queue.submit
 
 | 함수 | 레벨 | 역할 |
 |------|------|------|
+| `device->BeginCommandList()` | 셰이더엔진 | CPU 스레드에서 커맨드 기록 시작, `CommandList` 핸들 반환 |
+| `device->WaitCommandList(A, B)` | 셰이더엔진 | **GPU 실행 순서 보장**: A가 실행되기 전 B의 완료를 GPU가 대기 |
 | `ID3D12CommandQueue::ExecuteCommandLists()` | DX12 API | 커맨드 리스트를 GPU 큐에 **직접 제출** |
 | `CommandQueue::submit()` | 엔진 내부 | `submit_cmds`에 모인 커맨드 리스트를 `ExecuteCommandLists()`로 **일괄 제출** |
-| `GraphicsDevice_DX12::SubmitCommandLists()` | 엔진 최상위 | 프레임 전체의 모든 큐 submit + fence signal + present + CPU wait |
+| `GraphicsDevice_DX12::SubmitCommandLists()` | 엔진 최상위 | 프레임 전체의 모든 큐 submit + fence signal + present + **CPU wait** |
 
 관계:
 
 ```
-SubmitCommandLists()                    ← 프레임 끝에 1번 호출
+SubmitCommandLists()                    ← 프레임 끝에 1번 호출 (CPU 레벨에서 대기 포함)
   └─ queue.submit()                     ← 각 큐별로 호출
        └─ queue->ExecuteCommandLists()  ← DX12 API
 ```
 
 CopyAllocator는 프레임 루프와 무관하게 **`ExecuteCommandLists()`를 직접 호출**함.
 "지금 복사해 → 기다려 → 끝" 흐름을 단독으로 처리하기 때문.
+
+### WaitCommandList 메커니즘 — GPU 내부 순서 보장 (GraphicsDevice_DX12.cpp:6091)
+
+```cpp
+void GraphicsDevice_DX12::WaitCommandList(CommandList cmd, CommandList wait_for)
+{
+    Semaphore semaphore = new_semaphore();       // fence + fenceValue 쌍
+    commandlist.waits.push_back(semaphore);      // cmd는 이 semaphore를 기다림
+    commandlist_wait_for.signals.push_back(semaphore); // wait_for는 완료 시 이 semaphore를 signal
+}
+```
+
+- `Semaphore = {ID3D12Fence, fenceValue}` 쌍
+- **CPU가 기다리는 것이 아님** — GPU 큐 내부에서 cmd가 실행되기 전, wait_for의 signal을 GPU가 체킹
+- `SubmitCommandLists()` 내부에서 `queue->Wait(fence, value)` 형태로 GPU 큐에 등록됨
+
+### jobsystem과 WaitCommandList의 관계 (Renderer.cpp)
+
+```cpp
+jobsystem::context ctx;
+// 여러 커맨드를 CPU 스레드들이 병렬로 기록:
+jobsystem::Execute(ctx, [this, cmd](jobsystem::JobArgs args) {
+    device->WaitCommandList(cmd, cmd_prepareframe); // GPU 실행 순서 지정
+    DrawScene(...);
+});
+jobsystem::Execute(ctx, [this, cmd](jobsystem::JobArgs args) { ... });
+jobsystem::Wait(ctx);  // CPU에서: 모든 기록 스레드 완료 대기
+// → SubmitCommandLists() 호출
+```
+
+| | jobsystem::Execute/Wait | WaitCommandList |
+|---|---|---|
+| **작동 레이어** | CPU (스레드 병렬화) | GPU (큐 내 실행 순서) |
+| **목적** | 커맨드 기록을 여러 스레드에서 동시에 수행 | GPU가 실행할 때 A가 B보다 나중에 실행되도록 보장 |
+| **대기 주체** | CPU 스레드 | GPU 큐 |
+| **Fence 사용** | N/A | Semaphore (fence + value) |
 
 ---
 
@@ -318,5 +379,76 @@ GRAPHICS 큐:       [렌더링]  (독립적)
 COMPUTE 큐:        [계산]    (독립적)
 
 장점: GPU 큐 간 의존성 없음, 단순함
-단점: CPU 블로킹 (리소스 로딩 시점이라 체감 없음)
+단점: CPU 블로킹
+  - 초기 로딩 시: 이미 로딩 화면 등이 보이고 있으므로 체감 없음
+  - 런타임 중 동적 로딩 시: 렌더 루프가 CPU wait에서 멈추므로
+    유저가 순간적인 프레임 드롭/버벅임을 경험할 수 있음
+    → 런타임 로딩은 별도 스레드에서 처리하고, 완료 후 안전한 시점에
+      Scene에 반영하는 메커니즘이 필요 (아래 섹션 참고)
 ```
+
+---
+
+## 런타임 로딩과 비동기 처리
+
+현재 VizMotive의 `CopyAllocator::submit()`은 GPU 복사 완료까지 **CPU를 블로킹**한다.
+이 구조는 초기 로딩 시점에는 문제없지만, **앱 실행 중 동적으로 리소스 로딩**이
+일어나면 프레임 루프가 멈춰 유저가 버벅임을 경험한다.
+
+### WickedEngine의 해결 방법 1: LoadingScreen (wiLoadingScreen.cpp)
+
+큰 규모 로딩(다음 씬 전환 등)을 위한 패턴:
+
+```cpp
+// LoadingScreen::Start() — wiLoadingScreen.cpp:55
+
+// 1. 로딩 작업들을 jobsystem 백그라운드 스레드로 제출:
+for (auto& x : tasks)
+    wi::jobsystem::Execute(ctx, x);  // CPU 스레드 풀에서 병렬 실행
+
+// 2. 별도 std::thread를 떼어내어 완료를 비동기로 기다림:
+std::thread([this]() {
+    wi::jobsystem::Wait(ctx);  // 로딩 완료까지 이 스레드만 블로킹
+
+    // 3. 완료되면 메인 스레드가 안전한 시점(프레임 경계)에 콜백 실행:
+    wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT,
+        [this](uint64_t) {
+            finish();  // 로딩 완료 후 씬 전환 등
+        });
+}).detach();  // 메인 스레드(렌더 루프)에는 영향 없음
+```
+
+**핵심**: 로딩 완료 체크는 별도 스레드가 담당하고, 씬 반영은 `EVENT_THREAD_SAFE_POINT`
+(프레임 경계의 안전한 시점)에서 메인 스레드가 처리한다.
+로딩 중에는 2D 로딩 화면(`RenderPath2D`)을 렌더링하면서 getProgress()로 진행률 표시 가능.
+
+### WickedEngine의 해결 방법 2: 리소스 스트리밍 (wiResourceManager.cpp)
+
+텍스처 같은 리소스의 점진적(스트리밍) 로딩:
+
+```cpp
+// resourcemanager::Load() — STREAMING 플래그 사용
+auto res = resourcemanager::Load("texture.dds", resourcemanager::Flags::STREAMING);
+// → 최소 해상도(저해상도 mip)만 즉시 GPU 업로드
+// → 나머지는 백그라운드에서 점진적으로 스트리밍
+
+// 매 프레임 호출 — 스트리밍 진행 상태를 업데이트
+resourcemanager::UpdateStreamingResources(dt);
+```
+
+셰이더에서 렌더링할 때 해당 텍스처의 필요 해상도를 요청:
+```cpp
+resource.StreamingRequestResolution(required_resolution);
+// → UpdateStreamingResources()가 다음 프레임에 더 높은 해상도를 비동기로 업로드
+```
+
+**핵심**: 처음에는 저해상도(또는 더미 텍스처)로 보이다가, 백그라운드 스트리밍이 완료되면
+점차 고해상도로 대체된다. 프레임 루프를 멈추지 않는다.
+
+### 정리
+
+| 상황 | 권장 방법 |
+|---|---|
+| 초기 로딩 / 씬 전환 | LoadingScreen: jobsystem 병렬 로딩 + 완료 시 씬 반영 |
+| 런타임 텍스처 스트리밍 | `Flags::STREAMING` + `UpdateStreamingResources()` |
+| 현재 VizMotive 방식 | 블로킹 CPU wait — **초기 로딩에만 적합** |
