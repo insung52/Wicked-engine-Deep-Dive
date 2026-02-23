@@ -7,7 +7,7 @@ CPU와 GPU가 서로 다른 버퍼 슬롯을 사용해 파이프라이닝한다.
 
 이 문서는 `GetBufferIndex()` 기반으로 엔진의 더블 버퍼링 구조를 코드 레벨에서 정리한다.
 
-- fence 구조 변경 기록 → [apply_frame_fence_sync.md](apply_frame_fence_sync.md)
+- fence 구조 변경 기록 → [apply_frame_fence_sync.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_frame_fence_sync.md)
 
 ---
 
@@ -195,6 +195,8 @@ return GetCommandList(cmd).frame_allocators[GetBufferIndex()];
 위의 "[SubmitCommandLists()에서 GetBufferIndex() 의미 변화](#submitcommandlists에서-getbufferindex-의미-변화)" 섹션에서 설명.
 
 ## AllocationHandler::Update() — 리소스 지연 삭제
+
+**상세 Bindless Resources 개념 및 Deferred Deletion 정리 문서 : [appendix_bindless_resources_and_deferred_deletion.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_bindless_resources_and_deferred_deletion.md)**
 
 ```cpp
 // GraphicsDevice_DX12.h:548

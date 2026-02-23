@@ -5,7 +5,7 @@
 WickedEngine의 frame fence 진화 과정(topic_frame_fence_sync.md)을 참고하여,
 VizMotive의 fence 구조를 **최종 단순화 형태**(커밋 #21 기반)로 직접 수정한 기록.
 
-- 더블 버퍼링 개념, `GetBufferIndex()` 코드 분석, 사용처 정리 → [apply_double_buffering.md](apply_double_buffering.md)
+- 더블 버퍼링 개념, `GetBufferIndex()` 코드 분석, 사용처 정리 → [apply_double_buffering.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_double_buffering.md)
 
 ---
 
@@ -40,7 +40,7 @@ fence 자체는:
 |------|------|------|
 | **Signal** | `queue->Signal(fence, value)` | GPU 작업 완료 지점 추적 — 현재 프레임의 모든 커맨드 리스트 실행이 끝나면 fence 값을 기록 |
 | **큐 간 fence dependency** | `queue->Wait(fence, value)` | 모든 GPU 큐가 현재 프레임의 완료 지점에 도달해야 다음 프레임 작업 시작 가능 |
-| **CPU wait** | `SetEventOnCompletion` + `WaitForSingleObject` | CPU가 frame N 을 submit 후, frame N+1 을 준비하기 위해 frame N-1 의 버퍼 슬롯의 이전 GPU 작업이 완료되었는지 확인 (더블 버퍼링 상세: [apply_double_buffering.md](apply_double_buffering.md)) |
+| **CPU wait** | `SetEventOnCompletion` + `WaitForSingleObject` | CPU가 frame N 을 submit 후, frame N+1 을 준비하기 위해 frame N-1 의 버퍼 슬롯의 이전 GPU 작업이 완료되었는지 확인 (더블 버퍼링 상세: [apply_double_buffering.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_double_buffering.md)) |
 
 ---
 
