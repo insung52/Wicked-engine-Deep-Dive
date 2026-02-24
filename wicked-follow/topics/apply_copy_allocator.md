@@ -392,6 +392,7 @@ COMPUTE 큐:        [계산]    (독립적)
 ## 런타임 로딩과 비동기 처리
 
 현재 VizMotive의 `CopyAllocator::submit()`은 GPU 복사 완료까지 **CPU를 블로킹**한다.
+
 이 구조는 초기 로딩 시점에는 문제없지만, **앱 실행 중 동적으로 리소스 로딩**이
 일어나면 프레임 루프가 멈춰 유저가 버벅임을 경험한다.
 
@@ -417,6 +418,28 @@ std::thread([this]() {
         });
 }).detach();  // 메인 스레드(렌더 루프)에는 영향 없음
 ```
+
+**`jobsystem::Execute`가 실제로 하는 것**:
+각 task(`x`)를 **메인 스레드가 아닌 워커 스레드**에 배분한다.
+
+task 내부에서는 `CreateTexture()` → `copyAllocator.submit()` → `SetEventOnCompletion` (CPU blocking) 이 일어나지만,
+그 blocking이 **워커 스레드에서** 일어난다는 것이 핵심이다.
+
+```
+메인 스레드 (렌더 루프):   [렌더링...로딩 화면...렌더링...]  ← 전혀 멈추지 않음
+
+워커 스레드 A:  [CreateTexture()] → copyAllocator.submit() → GPU copy → [CPU blocking] → 완료
+워커 스레드 B:  [CreateTexture()] → copyAllocator.submit() → GPU copy → [CPU blocking] → 완료
+```
+
+**copy 메커니즘 자체(CopyAllocator의 CPU blocking)는 똑같다.**
+차이는 그 blocking이 어느 스레드에서 일어나느냐:
+
+| | VizMotive 현재 방식 | LoadingScreen 패턴 |
+|---|---|---|
+| copy 처리 스레드 | **메인 스레드** | **워커 스레드** |
+| 메인 렌더 루프 | ❌ copy 동안 멈춤 | ✅ 계속 돌아감 |
+| copy 방식 | CopyAllocator CPU blocking | CopyAllocator CPU blocking (동일) |
 
 **핵심**: 로딩 완료 체크는 별도 스레드가 담당하고, 씬 반영은 `EVENT_THREAD_SAFE_POINT`
 (프레임 경계의 안전한 시점)에서 메인 스레드가 처리한다.
