@@ -419,3 +419,61 @@ CPU 코어:  [sleep...............................][깨어남!]
 | CPU 점유 | 100% (busy loop) | 0% (sleeping) |
 | 깨어나는 방식 | 매 루프마다 polling | GPU 하드웨어 인터럽트 → OS가 깨움 |
 | 다른 스레드 영향 | 코어 독점 | 코어를 다른 스레드가 사용 가능 |
+
+---
+
+# 추가 정리: SubmitCommandLists() 코드 정리
+
+fence 변경 이후 가독성 개선을 위해 추가로 수정한 내용.
+
+## GetBufferIndex() 로컬 변수 캐싱
+
+`FRAMECOUNT++` 전후로 `GetBufferIndex()`의 반환값이 달라진다는 사실을 코드에서 명시적으로 드러내기 위해, 각 구간에 로컬 변수를 선언.
+
+```cpp
+const uint32_t submittingFrameBufferIndex = GetBufferIndex();
+// ... Signal, GPU-GPU sync에서 submittingFrameBufferIndex 사용 ...
+
+FRAMECOUNT++;
+
+const uint32_t nextFrameBufferIndex = GetBufferIndex();
+// ... CPU wait에서 nextFrameBufferIndex 사용 ...
+```
+
+| 변수 | 시점 | 의미 |
+|------|------|------|
+| `submittingFrameBufferIndex` | `FRAMECOUNT++` 전 | GPU에 제출 중인 현재 프레임의 버퍼 슬롯 |
+| `nextFrameBufferIndex` | `FRAMECOUNT++` 후 | CPU가 다음 프레임을 위해 준비할 버퍼 슬롯 |
+
+기존 `GetBufferIndex()` 반복 호출은 컴파일러가 최적화하므로 성능 차이는 없다.
+변수 이름만 봐도 "이 시점에서 GetBufferIndex()가 무엇을 의미하는지" 즉시 알 수 있는 것이 목적.
+
+## SubmitCommandLists() 블록 구조
+
+함수를 역할에 따라 두 블록으로 나눔:
+
+```cpp
+// Submit current frame:
+{
+    // cmd loop — 커맨드 리스트 제출
+    // Signal — 현재 프레임 완료 지점 기록
+    // Present
+    // GPU-GPU sync — 모든 큐가 현재 프레임 완료 후 다음 프레임 시작 가능하도록
+}
+
+// Signal descriptor heap progress to GPU after all queues complete current frame:
+//   Must come after GPU-GPU sync ...
+descriptorheap_res.SignalGPU(...);
+descriptorheap_sam.SignalGPU(...);
+
+// Prepare next frame:
+{
+    FRAMECOUNT++;
+    // CPU wait — 다음 프레임의 버퍼 슬롯이 안전하게 쓸 수 있는지 확인
+    // allocationhandler Update — 이전 프레임 리소스 해제
+}
+```
+
+`descriptorheap SignalGPU` 두 줄이 블록 사이에 위치하는 이유:
+GPU-GPU sync 이후에 큐잉되어야 COMPUTE/COPY 큐의 작업이 완료된 후 descriptor heap 진행 상태가 기록됨.
+어느 블록에도 속하지 않고 두 블록 사이에 독립적으로 위치.
