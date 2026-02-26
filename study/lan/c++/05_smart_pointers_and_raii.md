@@ -74,12 +74,90 @@ std::shared_ptr<Data> p1 = std::make_shared<Data>(); // 카운트 = 1
 
 // p1이 블록을 벗어남 → 카운트 = 0 → Data 메모리 자동 해제
 ```
-> **참고**: VizMotive나 WickedEngine에서는 직접 구현한 `wi::allocator::shared_ptr` 와 비슷한 자체 커스텀 스마트 포인터를 사용하기도 한다 (속도나 메모리 관리를 통제하기 위함).
+
+#### make_shared와 control block
+
+`shared_ptr`는 refcount를 **control block**이라는 별도 구조체에 저장해야 한다.
+T 객체 안에 넣을 수 없는 이유: T의 정의를 바꿀 수 없고, T는 shared_ptr를 모른다.
+
+`new T()`를 shared_ptr로 감쌀 때 — 힙 할당이 **2번** 발생:
+```cpp
+std::shared_ptr<Data> p(new Data());  // Data 힙 할당 + control block 힙 할당
+```
+```
+  힙 할당 ① → Data 객체
+  힙 할당 ② → control block (refcount 보관)
+
+  shared_ptr 내부:
+  ┌──────────────┬──────────────┐
+  │    T* ptr    │ ctrl_block*  │  ← 16바이트
+  └──────────────┴──────────────┘
+```
+
+`make_shared<T>()`는 Data + control block을 **한 번에** 힙 할당:
+```cpp
+std::shared_ptr<Data> p = std::make_shared<Data>();  // 힙 할당 1번
+```
+```
+  힙 할당 ① (한 번에):
+  ┌────────────────────────┐
+  │ control block (refcount│
+  ├────────────────────────┤
+  │ Data 객체              │
+  └────────────────────────┘
+
+  shared_ptr 내부:
+  ┌──────────────┬──────────────┐
+  │    T* ptr    │ ctrl_block*  │  ← 둘 다 위 블록 안에 있음
+  └──────────────┴──────────────┘
+```
+
+힙 할당 횟수를 1번으로 줄이지만, **여전히 힙 할당 자체는 발생한다**.
+→ 매 프레임 수백 개의 GPU 리소스를 생성/삭제하는 그래픽스 엔진에서는 이게 부담이 된다.
+→ 해결책이 Block Allocator 풀링 (힙 할당 없이 미리 준비된 슬롯 재사용).
+
+> **참고**: VizMotive나 WickedEngine에서는 직접 구현한 커스텀 shared_ptr를 사용하기도 한다 (Block Allocator와 결합해 힙 할당을 제거하기 위함).
 
 ### 3. 상호 참조 끊기 `std::weak_ptr`
 
 `shared_ptr` A가 B를 가리키고, B가 A를 가리키면 참조 카운트가 절대 0이 되지 않아 메모리 누수(순환 참조, Circular Reference)가 발생한다.
 이럴 때 한쪽을 `weak_ptr`로 선언해, "가리키고는 있되 카운트는 올리지 않도록" 만든다. 사용할 때는 `lock()`을 이용해 확인 후 쓴다.
+
+```cpp
+shared_ptr<T> strong = make_shared<T>();  // refcount = 1
+weak_ptr<T>   weak   = strong;            // refcount 그대로 1 (증가 없음)
+
+strong.reset();  // refcount = 0 → ~T() 호출, 객체 파괴
+
+// 나중에 weak에서 사용 시도:
+shared_ptr<T> locked = weak.lock();
+if (locked)
+    // 객체 아직 살아있음
+else
+    // 객체 이미 파괴됨
+```
+
+#### lock()의 올바른 구현 — CAS
+
+`lock()`의 핵심: "refcount가 0이 아닐 때만 원자적으로 증가"시켜야 한다.
+단순히 inc → check → dec 순서로 하면 멀티스레드에서 race condition이 생긴다:
+
+```
+잘못된 구현:                        올바른 구현 (CAS):
+
+inc_refcount()                      try_inc_refcount()
+  refcount: 0 → 1                     do {
+                                         if (refcount == 0) return false;
+[다른 스레드: 객체 파괴 + 메모리 재사용]  } while (!CAS(expected, expected+1));
+                                       → 체크와 증가를 원자 연산 1번으로 처리
+
+check → refcount가 1이니 "살아있다" 판단  → 0이면 false 즉시 반환
+dec_refcount()                          → 실패 시 아무것도 건드리지 않음
+  refcount: 1 → 0
+  → 다른 객체의 메모리를 잘못 조작!
+```
+
+CAS(Compare-And-Swap): "현재 값이 expected와 같으면 새 값으로 바꾸고 true, 아니면 false"를 **원자적으로** 수행하는 CPU 명령어.
 
 ---
 

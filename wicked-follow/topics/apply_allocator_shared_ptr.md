@@ -10,7 +10,7 @@ VizMotive는 GPU 리소스 객체(`Texture_DX12`, `Resource_DX12` 등)를 `std::
 WickedEngine이 선택한 방식과 다른 부분이 있으며, 각 선택의 이유를 함께 설명한다.
 
 > **배경 개념 참고**
-> - `shared_ptr` / `weak_ptr` 기초: [appendix_shared_ptr.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_shared_ptr.md)
+> - `shared_ptr` / `weak_ptr` / control block: [05_smart_pointers_and_raii.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/lan/c%2B%2B/05_smart_pointers_and_raii.md)
 > - Block Allocator / 메모리 풀링: [appendix_block_allocator.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_block_allocator.md)
 > - DLL 경계 문제: [appendix_dll_boundary.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_dll_boundary.md)
 
@@ -184,7 +184,7 @@ struct SharedBlockAllocator
 
 #### 1-2. shared_ptr / weak_ptr
 
-> refcount 동작, weak_ptr::lock() 기초: [appendix_shared_ptr.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_shared_ptr.md)
+> shared_ptr / weak_ptr / control block 개념 : [05_smart_pointers_and_raii.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/lan/c%2B%2B/05_smart_pointers_and_raii.md)
 
 allocator 포인터를 멤버로 직접 보유.
 

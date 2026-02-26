@@ -129,8 +129,6 @@ free_list.push_back(slot);  // 슬롯을 free_list로 직접 반환
 
 ### 슬롯 하나의 구조
 
-refcount를 별도 힙에 두지 않고 슬롯 안에 함께 넣으면 control block 할당이 필요 없다.
-
 ```cpp
 struct alignas(256) RawStruct
 {
@@ -237,58 +235,31 @@ struct shared_ptr {
 
 ### refcount를 슬롯 안에 내장하는 이유
 
-`std::shared_ptr`는 refcount를 **control block**이라는 별도 구조에 보관한다.
+> `std::shared_ptr`의 control block 개념: [05_smart_pointers_and_raii.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/lan/c%2B%2B/05_smart_pointers_and_raii.md)
+
+`std::shared_ptr`는 refcount를 **control block**이라는 별도 구조체에 힙 할당한다.
+`make_shared<T>()`를 써도 힙 할당은 1번 발생한다.
+
+Block Allocator의 슬롯은 처음부터 data + refcount가 함께 들어있어, 객체 생성 시 힙 할당이 없다:
 
 ```
-std::make_shared<T>() 내부:
+std::make_shared<T>():                  Block Allocator의 make_shared<T>():
 
-  힙 할당 ①:
-  ┌────────────────────────────┐
-  │ control block              │  ← refcount, deleter 등
-  ├────────────────────────────┤
-  │ T 객체                     │  ← 데이터
-  └────────────────────────────┘
+  힙 할당 ① (매번 발생):                 free_list.pop_back() (힙 할당 없음):
+  ┌────────────────────┐                ┌────────────────────────────┐
+  │ control block      │ ← refcount     │ data[sizeof(T)]            │
+  ├────────────────────┤                ├────────────────────────────┤
+  │ T 객체              │                │ refcount      ← 1로 초기화  │
+  └────────────────────┘                │ refcount_weak ← 1로 초기화  │
+                                        └────────────────────────────┘
 
-  shared_ptr 구조:
-  ┌──────────────┬──────────────┐
-  │    T* ptr    │ ctrl_block*  │  ← 16바이트
-  └──────────────┴──────────────┘
+  shared_ptr:                           shared_ptr:
+  ┌──────────┬────────────┐             ┌──────────┬────────────┐
+  │  T* ptr  │ ctrl_blk*  │             │  T* ptr  │ allocator* │
+  └──────────┴────────────┘             └──────────┴────────────┘
 ```
 
-`make_shared`는 control block + T 객체를 한 번의 힙 할당으로 붙여서 만든다.
-그래도 **힙 할당 자체**는 여전히 발생한다.
-
-Block Allocator의 RawStruct는 다르다:
-
-```
-make_shared<T>() 내부:
-
-  free_list에서 이미 확보된 슬롯 꺼냄 (힙 할당 없음):
-  ┌────────────────────────────┐
-  │ data[sizeof(T)]            │  ← 데이터 (placement new로 생성자만 호출)
-  ├────────────────────────────┤
-  │ refcount                   │  ← control block 역할을 슬롯이 대신
-  │ refcount_weak              │
-  └────────────────────────────┘
-
-  shared_ptr 구조:
-  ┌──────────────┬──────────────┐
-  │    T* ptr    │ allocator*   │  ← 16바이트
-  └──────────────┴──────────────┘
-       ↑ 슬롯의 data 시작 주소     allocator가 refcount 위치를 알고 있음
-```
-
-refcount를 접근할 때:
-```cpp
-// std::shared_ptr: ctrl_block* 역참조
-ctrl_block->refcount++;
-
-// Block Allocator: ptr에서 RawStruct로 역산 (같은 슬롯 안에 있으므로)
-RawStruct* raw = reinterpret_cast<RawStruct*>(ptr);
-raw->refcount++;
-```
-
-결론: **슬롯 자체가 control block을 내장**하므로 별도 힙 할당 없음.
+결론: 슬롯 자체가 control block 역할을 하므로 **객체 생성 시 힙 할당 없음**.
 
 ---
 
