@@ -76,47 +76,47 @@ inline std::atomic<uint8_t> block_allocator_count{ 0 };
 
 ---
 
-## VizMotive 해결책: allocator 포인터 직접 저장
+## DLL-safe 설계 패턴: allocator 포인터 직접 저장
 
 전역 배열(DLL마다 별도 인스턴스)에 의존하는 대신,
-`shared_ptr` 안에 allocator 포인터를 직접 저장한다.
+`shared_ptr` 안에 allocator 포인터를 직접 저장하면 DLL 경계를 넘어도 안전하다.
 
 ```cpp
-// WickedEngine: 8바이트, 전역 배열 의존
+// 전역 배열 방식 (DLL-unsafe): 8바이트
 struct shared_ptr {
     uint64_t handle;  // ptr | allocator_id
-    // allocator 접근: block_allocators[handle & 0xFF] (전역 배열)
+    // allocator 접근: block_allocators[handle & 0xFF] (전역 배열 의존)
 };
 
-// VizMotive: 16바이트, allocator 직접 참조
+// 직접 포인터 방식 (DLL-safe): 16바이트
 struct shared_ptr {
     T* ptr;
-    SharedBlockAllocator* allocator;  // 포인터 직접 보유
+    SharedBlockAllocator* allocator;  // allocator 포인터 직접 보유
     // allocator 접근: this->allocator (전역 배열 불필요)
 };
 ```
 
 ```
-DX12.dll에서 Texture 생성:
-  shared_ptr.ptr       = &texture_slot
-  shared_ptr.allocator = &DX12.dll내부의 texture_allocator  ← 포인터 직접 저장
+DLL A에서 객체 생성:
+  shared_ptr.ptr       = &slot
+  shared_ptr.allocator = &DLL_A_내부의_allocator  ← 포인터 직접 저장
 
-Engine.dll에서 shared_ptr 소멸:
+DLL B에서 shared_ptr 소멸:
   this->allocator->dec_refcount(ptr)  ← 어느 DLL에서 호출해도
-                                         DX12.dll의 allocator를 직접 가리킴
+                                         DLL A의 allocator를 직접 가리킴
                                          전역 배열 조회 없음 → 정상 작동
 ```
 
 ---
 
-## 트레이드오프
+## 두 방식의 트레이드오프
 
-| | WickedEngine | VizMotive |
+| | 전역 배열 방식 | 직접 포인터 방식 |
 |---|---|---|
 | `shared_ptr` 크기 | 8바이트 | 16바이트 |
 | allocator 접근 | 전역 배열 인덱스 조회 | 포인터 직접 역참조 |
 | DLL 경계 | ❌ 실패 | ✅ 정상 |
 | 256바이트 정렬 요구 | 필요 (하위 8비트 ID 저장) | 불필요 |
 
-10,000개 객체 기준 메모리 차이: 10,000 × 8바이트 = 약 80KB 추가.
-그래픽스 엔진에서 무시 가능한 수준.
+> 두 방식 중 어느 것을 선택할지는 아키텍처(단일 exe vs 다중 DLL)에 따라 결정된다.
+> 구체적인 설계 선택과 이유: [apply_allocator_shared_ptr.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_allocator_shared_ptr.md)

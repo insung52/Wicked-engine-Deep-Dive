@@ -131,26 +131,3 @@ dec_refcount()
   ↑ 다른 객체의 refcount 오염!
 ```
 
----
-
-## 이 엔진에서의 사용 패턴
-
-```cpp
-// GBackend.h — GPU 리소스 선언 (DX12를 모름)
-struct Texture
-{
-    vz::allocator::shared_ptr<void> internal_state;
-    //                         ^^^^
-    //                         void*: 어떤 DX12 타입인지 몰라도 됨
-    bool IsValid() const { return internal_state.IsValid(); }
-};
-
-// GraphicsDevice_DX12.cpp — DX12 백엔드
-bool CreateTexture(Texture* tex, ...)
-{
-    auto internal_state = vz::allocator::make_shared<Texture_DX12>();
-    //   ↑ 풀에서 슬롯 가져와서 placement new로 Texture_DX12 생성
-    tex->internal_state = internal_state;  // shared_ptr<void>에 저장
-    // tex가 소멸될 때 내부적으로 ~Texture_DX12() 자동 호출
-}
-```
