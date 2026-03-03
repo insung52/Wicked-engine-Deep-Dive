@@ -5,6 +5,12 @@
 WickedEngine의 텍스처 처리 개선(topic_texture.md)을 참고하여,
 VizMotive에 필요한 변경 사항을 분석하고 적용한 기록.
 
+> **배경 개념 참고**
+> - 텍스처 전체 흐름 (파일→업로드→렌더→화면), Mipmap, Footprint, Subresource, BC 압축, Descriptor, Barrier:
+>   [part5_texture_lifecycle.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md)
+> - 힙 종류, 디스크립터, 리소스 상태 기초:
+>   [part4_resource_management.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part4_resource_management.md)
+
 적용 항목 4가지:
 
 | # | 항목 | 파일 | 문제 |
@@ -21,6 +27,8 @@ VizMotive에 필요한 변경 사항을 분석하고 적용한 기록.
 ---
 
 ## 1. BC 블록 계산 수정
+
+> **BC 압축 개념**: [part5_texture_lifecycle.md §5.7](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md#57-bc-block-compressed-텍스처)
 
 ### 문제
 
@@ -145,6 +153,8 @@ constexpr size_t ComputeTextureMemorySizeInBytes(const TextureDesc& desc)
 ---
 
 ## 2. DeleteSubresources RTV/DSV 누수 수정
+
+> **SRV/RTV/DSV 개념**: [part5_texture_lifecycle.md §5.9](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md#59-descriptor뷰--같은-텍스처를-여러-방식으로-쓰기)
 
 ### 문제
 
@@ -295,6 +305,8 @@ using Texture_DX12 = Resource_DX12;
 
 ## 3. Shader-readable SwapChain
 
+> **SwapChain / DXGI_USAGE_SHADER_INPUT 개념**: [part5_texture_lifecycle.md §5.11](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md#511-swapchain--화면에-표시되는-특별한-텍스처)
+
 ### 문제
 
 현재 back buffer는 렌더 타겟(RTV)으로만 사용할 수 있고,
@@ -443,6 +455,9 @@ Texture GraphicsDevice_DX12::GetBackBuffer(const SwapChain* swapchain) const
 
 ## 4. 헬퍼 함수 추가
 
+> **Mipmap 개념**: [part5_texture_lifecycle.md §5.3](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md#53-mipmap--거리별-해상도-최적화)
+> **Subresource Index 개념**: [part5_texture_lifecycle.md §5.6](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md#56-subresource--default-heap-텍스처의-특정-mipsliceplane-지정)
+
 ### 문제
 
 **문제 1: GetMipCount(const TextureDesc&) wrapper 없음**
@@ -556,6 +571,9 @@ if (texture->desc.mip_levels == 0)
 ---
 
 ## 보충 설명
+
+> 아래 개념들의 더 상세한 설명 (업로드 전체 흐름 코드, Mipmap 메모리 계산, Barrier 등):
+> [part5_texture_lifecycle.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part5_texture_lifecycle.md)
 
 ### BC(Block Compressed) 텍스처란
 
