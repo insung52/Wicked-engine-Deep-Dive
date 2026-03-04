@@ -529,6 +529,39 @@ SamplerState sampler0 : register(s0);   // Static Sampler
 4. Static Sampler는 공간 안 차지함
 ```
 
+### Root Descriptor의 byte offset 주의사항
+
+Root Descriptor로 버퍼의 특정 영역을 바인딩할 때, **byte offset을 직접 더해야 한다.**
+
+```
+GPUBuffer (1MB):
+├─ offset=0:     데이터 A (512KB)  ← SRV[0]
+└─ offset=512KB: 데이터 B (512KB)  ← SRV[1]
+
+Descriptor Table SRV로 SRV[1] 바인딩:
+  CreateShaderResourceView(buffer, srvDesc, cpuHandle)
+  srvDesc.Buffer.FirstElement = 512KB / sizeof(element)  ← descriptor 안에 offset 포함
+  → SetGraphicsRootDescriptorTable(slot, gpuHandle)
+  → GPU가 descriptor를 읽으면서 자동으로 올바른 위치 참조
+
+Root Descriptor SRV로 SRV[1] 바인딩:
+  buffer->GetGPUVirtualAddress()  → 버퍼 시작 주소 (offset=0)
+  → SetGraphicsRootShaderResourceView(slot, gpuVirtualAddress)
+  ← offset 정보가 없음! 버퍼 처음부터 읽음 → 틀린 데이터!
+  → gpu_virtual_address + 512KB 를 직접 계산해서 넘겨야 함
+```
+
+| 방식 | offset 반영 위치 | 자동 처리 |
+|------|-----------------|----------|
+| Descriptor Table SRV | `srvDesc.Buffer.FirstElement` | GPU가 자동 처리 |
+| Root Descriptor SRV/UAV | 없음 — 직접 더해야 함 | 호출자가 직접 계산 |
+| Root Descriptor CBV | 없음 — 직접 더해야 함 | 호출자가 직접 계산 |
+
+Descriptor Table은 뷰 생성 시 `FirstElement`에 offset을 포함하므로
+GPU가 descriptor를 읽을 때 자동으로 올바른 위치를 가리킨다.
+Root Descriptor는 날(raw) GPU 주소를 그대로 전달하므로
+`gpu_virtual_address + byte_offset`을 명시적으로 계산해서 전달해야 한다.
+
 ```cpp
 // 좋은 예: 바인딩 빈도에 따른 배치
 struct RootSignatureLayout {
