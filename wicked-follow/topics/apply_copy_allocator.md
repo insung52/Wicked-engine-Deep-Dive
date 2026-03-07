@@ -1,5 +1,7 @@
 # VizMotive 적용: CopyAllocator 개선
 
+**[Notebooklm pdf 문서 : copy_allocator](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/copy_allocator.pdf)**
+
 ## 개요
 
 WickedEngine의 CopyAllocator 개선 과정(topic_copy_allocator.md)을 참고하여,

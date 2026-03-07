@@ -1,5 +1,7 @@
 # VizMotive 적용: Texture 관련 개선
 
+**[Notebooklm pdf 문서 : texture](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/texture.pdf)**
+
 ## 개요
 
 WickedEngine의 텍스처 처리 개선(topic_texture.md)을 참고하여,

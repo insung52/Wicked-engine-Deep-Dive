@@ -1,5 +1,7 @@
 # VizMotive: Custom Allocator & Pooled shared_ptr 설계
 
+**[Notebooklm pdf 문서 : allocator_shaerd_ptr](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/allocator_shared_ptr.pdf)**
+
 ## 개요
 
 VizMotive는 GPU 리소스 객체(`Texture_DX12`, `Resource_DX12` 등)를 `std::shared_ptr`로 관리하고 있었다.

@@ -1,5 +1,7 @@
 # VizMotive 적용: PSO & Root Signature
 
+**[Notebooklm pdf 문서 : pso_rootsig](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/pso_rootsig.pdf)**
+
 ## 개요
 
 WickedEngine의 PSO/Root Signature 개선(topic_pso_rootsig.md)을 참고하여,
