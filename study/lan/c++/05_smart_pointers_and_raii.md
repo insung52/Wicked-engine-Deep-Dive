@@ -78,9 +78,10 @@ std::shared_ptr<Data> p1 = std::make_shared<Data>(); // 카운트 = 1
 #### make_shared와 control block
 
 `shared_ptr`는 refcount를 **control block**이라는 별도 구조체에 저장해야 한다.
-T 객체 안에 넣을 수 없는 이유: T의 정의를 바꿀 수 없고, T는 shared_ptr를 모른다.
 
-`new T()`를 shared_ptr로 감쌀 때 — 힙 할당이 **2번** 발생:
+T(Data) 객체 안에 넣을 수 없는 이유: Data의 정의를 바꿀 수 없고, Data는 shared_ptr를 모른다.
+
+`new Data()`를 shared_ptr로 감쌀 때 — 힙 할당이 **2번** 발생:
 ```cpp
 std::shared_ptr<Data> p(new Data());  // Data 힙 할당 + control block 힙 할당
 ```
@@ -90,11 +91,11 @@ std::shared_ptr<Data> p(new Data());  // Data 힙 할당 + control block 힙 할
 
   shared_ptr 내부:
   ┌──────────────┬──────────────┐
-  │    T* ptr    │ ctrl_block*  │  ← 16바이트
+  │    Data* ptr │ ctrl_block*  │  ← 16바이트
   └──────────────┴──────────────┘
 ```
 
-`make_shared<T>()`는 Data + control block을 **한 번에** 힙 할당:
+`make_shared<Data>()`는 Data + control block을 **한 번에** 힙 할당:
 ```cpp
 std::shared_ptr<Data> p = std::make_shared<Data>();  // 힙 할당 1번
 ```
@@ -103,12 +104,12 @@ std::shared_ptr<Data> p = std::make_shared<Data>();  // 힙 할당 1번
   ┌────────────────────────┐
   │ control block (refcount│
   ├────────────────────────┤
-  │ Data 객체              │
+  │ Data 객체               │
   └────────────────────────┘
 
   shared_ptr 내부:
   ┌──────────────┬──────────────┐
-  │    T* ptr    │ ctrl_block*  │  ← 둘 다 위 블록 안에 있음
+  │    Data* ptr │ ctrl_block*  │  ← 둘 다 위 블록 안에 있음
   └──────────────┴──────────────┘
 ```
 
