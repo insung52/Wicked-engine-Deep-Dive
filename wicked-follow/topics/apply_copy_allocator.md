@@ -431,7 +431,7 @@ COMPUTE 큐:        [계산]    (독립적)
 
 ---
 
-## 런타임 로딩과 비동기 처리
+## 런타임 로딩과 비동기 처리 (렌더링 엔진 레벨 feature)
 
 현재 VizMotive의 `CopyAllocator::submit()`은 GPU 복사 완료까지 **CPU를 블로킹**한다.
 
@@ -517,3 +517,5 @@ resource.StreamingRequestResolution(required_resolution);
 | 초기 로딩 / 씬 전환 | LoadingScreen: jobsystem 병렬 로딩 + 완료 시 씬 반영 |
 | 런타임 텍스처 스트리밍 | `Flags::STREAMING` + `UpdateStreamingResources()` |
 | 현재 VizMotive 방식 | 블로킹 CPU wait — **초기 로딩에만 적합** |
+
+이는 DX12 레이어 개선이 아닌, 렌더링 엔진 레벨의 별도 feature 이므로 vizmotive 에 적용 보류
