@@ -150,7 +150,8 @@ GPU 내부:
   DMA Engine    ← QUEUE_COPY 처리  ← 전용 복사 하드웨어
 ```
 
-QUEUE_COPY는 DMA 엔진을 사용하므로 GRAPHICS/COMPUTE와 겹쳐서 동시 실행 가능.
+QUEUE_COPY는 DMA(Direct Memory Access) 엔진을 사용하므로 GRAPHICS/COMPUTE와 겹쳐서 동시 실행 가능.
+> **DMA 엔진이란?** CPU나 GPU의 메인 연산 코어(3D/Compute)와 독립적으로 **메모리 간 데이터 전송(복사)만 전담하는 하드웨어 유닛**이다. 연산 코어의 리소스를 소모하거나 작업 흐름을 방해하지 않고 백그라운드에서 메모리를 복사할 수 있어 병렬 처리에 매우 효과적이다.
 WickedEngine은 이 특성을 프레임 내 복사 작업에 활용한다.
 
 **시나리오 1: 텍스처 스트리밍 mip 업로드**
