@@ -7,7 +7,7 @@
 ![alt text](image-2.png)
 
 왼쪽 구 2개 : 구의 그림자가 바닥 메시에 없음 + DDGI 간접광 = 빛을 직접 받는 바닥 메시보다 더 밝아지는 결과
-- point light 에도 shadow 를 추가하면 해결 가능.
+- point light 에도 shadow 를 추가하면 자연스러운 해결 가능.
 
 오른쪽 구 1개 : 빛이 생기면 안되는 위치 (구, 바닥 메시로 가려지는 부분)에 간접광 발생
 - point light shadow 와 관련이 낮은 문제 발견
