@@ -123,7 +123,7 @@ probeOffset = clamp(probeOffset, -probe_limit, probe_limit);
 ### 1. Point Light Shadow 구현 (근본 해결)
 - 외부면에서 빛이 차단되면 내부로 직접광이 들어올 수 없음
 - Probe ray의 shadow ray 판정이 올바르게 작동하면 내부면에서 잘못된 radiance 축적 방지
-- 겹친 geometry에서 간접광 누수 문제도 함께 해결됨
+- 겹친 geometry에서 간접광 누수 문제도 어느정도 해결됨
 
 ### 2. Solid Geometry 내부 Probe Disable ★ 업계 표준 접근법
 
