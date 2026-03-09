@@ -23,6 +23,12 @@ CPU 메모리에 있는 데이터(텍스처, 버퍼)를 **GPU 메모리(VRAM)로
 
 사용 시점: `CreateBuffer()`, `CreateTexture()` 등 **리소스 생성 시 초기 데이터 업로드**.
 
+> ⚠️ **CopyAllocator는 초기 리소스 생성 시에만 사용한다.**
+> 리소스가 방금 생성된 시점 = 아직 어떤 큐도 이 리소스에 접근한 적 없음 → 동기화 불필요.
+> 렌더링 도중 이미 GPU가 사용 중인 리소스에 CopyAllocator를 쓰면 동기화 없는 동시 접근 → Data Race.
+
+> 런타임 복사는 별도의 `BeginCommandList(QUEUE_COPY)` + `WaitCommandList` 패턴을 사용한다. ([아래 섹션 참고](#copyallocator-사용-범위-제한과-런타임-복사))
+
 ---
 
 ## 배경 지식: 큐/커맨드 관련 함수 정리
@@ -54,11 +60,11 @@ CPU 메모리에 있는 데이터(텍스처, 버퍼)를 **GPU 메모리(VRAM)로
 
 | 함수 | 레벨 | 역할 |
 |------|------|------|
-| `device->BeginCommandList()` | 셰이더엔진 | CPU 스레드에서 커맨드 기록 시작, `CommandList` 핸들 반환 |
-| `device->WaitCommandList(A, B)` | 셰이더엔진 | **GPU 실행 순서 보장**: A가 실행되기 전 B의 완료를 GPU가 대기 |
-| `ID3D12CommandQueue::ExecuteCommandLists()` | DX12 API | 커맨드 리스트를 GPU 큐에 **직접 제출** |
-| `CommandQueue::submit()` | 엔진 내부 | `submit_cmds`에 모인 커맨드 리스트를 `ExecuteCommandLists()`로 **일괄 제출** |
-| `GraphicsDevice_DX12::SubmitCommandLists()` | 엔진 최상위 | 프레임 전체의 모든 큐 submit + fence signal + present + **CPU wait** |
+| `ID3D12CommandQueue::ExecuteCommandLists()` | **디바이스 레벨** (그래픽 API 직접 호출) | 커맨드 리스트를 GPU 큐에 **직접 제출** |
+| `device->BeginCommandList()` | **엔진 백엔드 API** — 외부에 노출됨 | CPU 스레드에서 커맨드 기록 시작, `CommandList` 핸들 반환 |
+| `device->WaitCommandList(A, B)` | **엔진 백엔드 API** — 외부에 노출됨 | **GPU 실행 순서 보장**: A가 실행되기 전 B의 완료를 GPU가 대기 |
+| `GraphicsDevice_DX12::SubmitCommandLists()` | **엔진 백엔드 API** — 외부에 노출됨 | 프레임 전체의 모든 큐 submit + fence signal + present + **CPU wait** |
+| `CommandQueue::submit()` | **엔진 백엔드 API** — 내부용 (노출 안됨) | `submit_cmds`에 모인 커맨드 리스트를 `ExecuteCommandLists()`로 **일괄 제출** |
 
 관계:
 
@@ -220,6 +226,76 @@ copyAllocator.submit(cmd);  // 별도 큐에서 즉시 실행 + CPU 대기
 
 현재 VizMotive에서는 메인 QUEUE_COPY를 렌더링 중에 직접 사용하는 코드가 없음.
 GRAPHICS 큐가 복사 명령도 지원하므로, 프레임 내 복사는 GRAPHICS 큐에서 처리.
+
+---
+
+### CopyAllocator 사용 범위 제한과 런타임 복사
+
+#### CopyAllocator가 안전한 이유 (초기 생성 한정)
+
+```
+CreateTexture() / CreateBuffer() 호출 시점:
+  리소스가 방금 생성됨
+  → 아직 어떤 GPU 큐에도 제출된 적 없음
+  → GRAPHICS / COMPUTE 큐가 이 리소스에 접근 중일 수 없음
+  → CopyAllocator가 동기화 없이 복사해도 Data Race 없음
+  → 복사 완료 후 다른 큐들이 이 리소스를 사용 시작
+```
+
+#### 런타임 복사에서 CopyAllocator를 쓰면 안 되는 이유
+
+이미 렌더링에 사용 중인 리소스 A를 CopyAllocator로 업데이트하려 하면:
+
+```
+GRAPHICS 큐:      [--- Draw(A 읽는 중) ---]
+CopyAllocator 큐: [--- Copy → A (덮어쓰는 중) ---]
+                       ↑ 동기화 없음 → Data Race
+```
+
+- **Write-After-Read**: GRAPHICS가 A를 읽는 도중 Copy가 A에 덮어씀
+- **Read-After-Write**: GRAPHICS가 A에 쓰는 도중 Copy가 중간 상태를 읽음
+
+#### WickedEngine의 런타임 복사 패턴 — BeginCommandList(QUEUE_COPY) + WaitCommandList
+
+CopyAllocator 대신 메인 QUEUE_COPY를 `BeginCommandList`로 열고, `WaitCommandList`로 GPU-GPU 동기화를 삽입한다.
+
+**예시 1: Ocean readback (wiRenderPath3D.cpp)**
+```cpp
+// COMPUTE로 파도 시뮬레이션
+CommandList cmd_ocean = device->BeginCommandList(QUEUE_COMPUTE);
+wi::renderer::UpdateOcean(cmd_ocean);
+
+// COPY는 COMPUTE 완료 후 시작 (WaitCommandList로 GPU-GPU 동기화)
+CommandList cmd_oceancopy = device->BeginCommandList(QUEUE_COPY);
+device->WaitCommandList(cmd_oceancopy, cmd_ocean);  // GPU: cmd_ocean 끝날 때까지 대기
+wi::renderer::ReadbackOcean(visibility_main, cmd_oceancopy);
+```
+
+```
+COMPUTE 큐: [cmd_ocean 파도 시뮬레이션] ──Signal──▶
+                                                   │
+COPY 큐:    ◀──Wait── [cmd_oceancopy readback 복사]
+```
+
+**예시 2: 지형 virtual texture 타일 복사 (wiRenderPath3D.cpp)**
+```cpp
+CommandList cmd_copypages = device->BeginCommandList(QUEUE_COPY);
+device->WaitCommandList(cmd_copypages, cmd_이전작업);
+// 필요한 타일 페이지를 VRAM에 복사
+```
+
+이 패턴의 핵심:
+- `BeginCommandList(QUEUE_COPY)` → 메인 QUEUE_COPY를 프레임 커맨드 리스트로 열음
+- `WaitCommandList(copy_cmd, prev_cmd)` → GPU가 내부적으로 prev_cmd 완료 후 copy_cmd 시작
+- CPU는 블로킹되지 않음 → 렌더 루프 계속 진행
+- `SubmitCommandLists()` 에서 모든 큐가 일괄 제출될 때 함께 GPU에 전달됨
+
+| | CopyAllocator | BeginCommandList(QUEUE_COPY) |
+|---|---|---|
+| 용도 | **초기 리소스 생성 시에만** | 렌더링 중 런타임 복사 |
+| 동기화 | 없음 (불필요, 리소스가 새것) | `WaitCommandList`로 GPU-GPU 동기화 |
+| CPU | 블로킹 대기 | 논블로킹 (GPU가 내부 처리) |
+| 제출 시점 | 즉시 `ExecuteCommandLists()` 직접 호출 | `SubmitCommandLists()`에서 프레임 끝에 일괄 제출 |
 
 ---
 
