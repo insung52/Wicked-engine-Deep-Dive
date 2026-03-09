@@ -6,15 +6,19 @@
 
 ![alt text](image-2.png)
 
+왼쪽 구 2개 : 구의 그림자가 바닥 메시에 없음 + DDGI 간접광 = 빛을 직접 받는 바닥 메시보다 더 밝아지는 결과
+- point light 에도 shadow 를 추가하면 해결 가능.
+
 오른쪽 구 1개 : 빛이 생기면 안되는 위치 (구, 바닥 메시로 가려지는 부분)에 간접광 발생
+- point light shadow 와 관련이 낮은 문제 발견
 
-왼쪽 구 2개 : 구의 그림자가 바닥 메시에 없음 + DDGI 간접광 = 빛을 직접 받는 바닥 메시보다 더 밝음
 
-### 상세 분석
+### 추가 분석
 
 <https://github.com/user-attachments/assets/1858a026-f6c8-4f0a-bead-4a481cd0f258>
 
 구 geometry 내부의 probe 가 간접광을 받고있는 상황을 발견
+- geometry 내부 probe 들 중, 빛과 가까운 쪽 probe 보다 반대쪽 probe 들이 더 밝음!
 
 ---
 
@@ -121,7 +125,18 @@ probeOffset = clamp(probeOffset, -probe_limit, probe_limit);
 - Probe ray의 shadow ray 판정이 올바르게 작동하면 내부면에서 잘못된 radiance 축적 방지
 - 겹친 geometry에서 간접광 누수 문제도 함께 해결됨
 
-### 2. Solid Geometry 내부 Probe Disable
-- Relocation으로 탈출 불가능한 probe를 비활성화
-- 비활성화된 probe는 주변 유효 probe들의 irradiance를 보간해서 사용
-- 현재 voxelgrid fallback이 일부 역할을 하고 있으나 불완전
+### 2. Solid Geometry 내부 Probe Disable ★ 업계 표준 접근법
+
+**DDGI 논문(Majercik et al., 2019)과 주요 게임 엔진(UE5 Lumen, Unity HDRP 등)에서 공통적으로 채택하는 방법이다.**
+
+Solid geometry 내부에 들어간 probe는 신뢰할 수 없는 irradiance를 축적하므로 비활성화하고, 샘플링 시 유효한 주변 probe들의 irradiance만 사용한다.
+
+**판정 기준:**
+- Ray hit distance가 모든 방향에서 일정 기준 이하 (사방이 막힘) → 내부 probe로 판정
+- 또는 voxelgrid로 probe 위치가 solid voxel 내부임을 직접 확인
+
+**비활성화 probe 처리:**
+- 해당 probe의 weight를 0으로 설정 → `ddgi_sample_irradiance`의 trilinear 보간에서 자동으로 제외
+- 주변 유효 probe들의 irradiance로 대체
+
+현재 구현에서는 voxelgrid fallback이 일부 역할을 하고 있으나, voxelgrid 비활성화 시 동작하지 않아 불완전하다.
