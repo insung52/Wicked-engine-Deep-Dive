@@ -44,16 +44,6 @@ if (cam_frustum.Intersects(cameras[shcam].boundingfrustum))
 
 `cam_frustum`은 `BoundingFrustum::CreateFromMatrix()`로 생성했는데, DirectXMath의 `BoundingFrustum`은 LHS(왼손 좌표계) 기준이지만 VizMotive의 view-projection matrix는 RHS(오른손 좌표계)다. 좌표계 불일치로 `Intersects()`가 항상 false를 반환해 **camera_count가 항상 0**이 되고, shadow atlas에 아무것도 렌더링되지 않았다.
 
-추가로, 렌더링 실행 조건에도 논리 오류가 있었다:
-
-```cpp
-// 수정 전: renderQueue가 비어있지 않거나 transparent가 비어있으면 실행 → 항상 true
-if (!renderQueue.empty() || renderQueue_transparent.empty())
-
-// 수정 후: renderQueue 또는 renderQueue_transparent 중 하나라도 있으면 실행
-if (!renderQueue.empty() || !renderQueue_transparent.empty())
-```
-
 ### 수정
 
 frustum check를 제거하고 6개 face를 항상 cb에 등록한다. 메인 카메라와의 교차 여부와 관계없이 모든 face를 렌더링한다.
