@@ -52,8 +52,7 @@ Wicked Engine에서 geometry의 cast shadow를 끄자 VizMotive와 동일한 문
 
 **그늘쪽 probe가 더 밝아지는 역전 현상의 원인:**
 
-나중에 설명 그림 추가
-- 구 geometry 내부에 probe A, B, 외부에 probe C,D (정상적인 경우 비교용)
+![alt text](<스크린샷 2026-03-10 223641.png>)
 
 ```
 구 geometry, point light +X 방향 외부
