@@ -127,6 +127,8 @@ shadow ray가 작동하지 않아 빛이 새는 현상
 
 ![alt text](image-6.png)
 
+또다른 테스트
+
 ![alt text](image-7.png)
 
 cube 아래에 있는 sphere에서 반사된 빛이 cube 아랫면에 전달되는 현상.
