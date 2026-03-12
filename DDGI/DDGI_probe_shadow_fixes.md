@@ -106,7 +106,7 @@ if (surface.IsBackface())
 
 더 자세한 디버깅을 위해 point light shadow를 정상 작동시켰다. Shadow 파이프라인 자체는 이미 포팅되어 있었으나 버그 3가지로 미작동 상태였다.
 
-자세한 내용은 [PointLightShadow.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/Lighting/PointLightShadow.md) 참고.
+자세한 내용은 [PointLightShadow.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/shadow/PointLightShadow.md) 참고.
 
 ---
 
