@@ -4,23 +4,44 @@
 
 Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이해하기 쉽게 정리한 문서들.
 
-- **기간**: 2025년 3월 ~ 2026년 1월
+- **분석 커밋 대상 기간**: 2025년 3월 ~ 2026년 1월
 - **총 커밋**: dx_1 19개 + dx_2 25개 = 44개
 - **분석 대상**: DX12 관련 변경사항
 
 ---
 
+## 문서 구조
+
+- **`topic_*.md`** — Wicked Engine 커밋 분석. 변경 내용과 동기 이해용.
+- **`apply_*.md`** — VizMotive 적용 기록. 실제로 무엇을 어떻게 바꿨는지.
+- **`appendix/`** — 큰 개념 배경 지식 (더블 버퍼링, bindless 등). topic/apply에서 링크로 참조.
+
+---
+
 ## 주제별 문서
 
-| 주제 | 설명 | 관련 커밋 수 |
-|------|------|-------------|
-| [Frame Fence & Sync](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_frame_fence_sync.md) | 프레임 펜스 동기화 진화 과정 | 4개 |
-| [CopyAllocator](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_copy_allocator.md) | CPU→GPU 복사 시스템 개선 | 3개 |
-| [Custom Allocator & shared_ptr](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_allocator_shared_ptr.md) | Block Allocator 기반 커스텀 shared_ptr | 11개 |
-| [Texture Operations](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | 텍스처 생성/복사/관리 | 5개 |
-| [PSO & Root Signature](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | 파이프라인 상태 객체 관련 | 4개 |
-| [Struct Optimization](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | 구조체 메모리 최적화 | 2개 |
-| [Bug Fixes & Stability](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | 개별 버그 수정 | 7개 |
+| 주제 | 분석 | VizMotive 적용 | 관련 커밋 수 |
+|------|------|----------------|-------------|
+| Frame Fence & Sync | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_frame_fence_sync.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_frame_fence_sync.md) | 4개 |
+| CopyAllocator | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_copy_allocator.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_copy_allocator.md) | 3개 |
+| Custom Allocator & shared_ptr | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_allocator_shared_ptr.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_allocator_shared_ptr.md) | 11개 |
+| Texture Operations | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_texture.md) | 5개 |
+| PSO & Root Signature | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_pso_rootsig.md) | 4개 |
+| Struct Optimization | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | (미적용) | 2개 |
+| Bug Fixes & Stability | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | (미적용) | 7개 |
+
+---
+
+## 부록 (appendix/)
+
+개념 설명 문서. topic/apply 문서에서 링크로 참조.
+
+| 문서 | 내용 |
+|------|------|
+| [appendix_double_buffering](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_double_buffering.md) | 더블 버퍼링 구조, GetBufferIndex() 사용처 |
+| [appendix_block_allocator](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_block_allocator.md) | Block Allocator 개념 |
+| [appendix_bindless_resources_and_deferred_deletion](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_bindless_resources_and_deferred_deletion.md) | Bindless 리소스 & 지연 삭제 |
+| [appendix_dll_boundary](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_dll_boundary.md) | DLL 경계 이슈 |
 
 ---
 
