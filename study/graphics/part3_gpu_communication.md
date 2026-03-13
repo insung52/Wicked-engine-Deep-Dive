@@ -1210,6 +1210,51 @@ void OnResize(UINT width, UINT height) {
 
 ---
 
+## 3.9 엔진의 커맨드 리스트 추상화 레이어
+
+Wicked Engine(VizMotive) 레이어에서는 앞서 설명한 DX12 API를 직접 사용하지 않고, 엔진 자체의 추상화된 커맨드 리스트와 큐 관련 함수들을 사용한다.
+
+### 레이어 개요
+
+```text
+[최상위 — 셰이더 엔진 레벨]
+  CommandList (= 정수 ID)            ← BeginCommandList()로 받는 핸들
+  │  내부적으로 CommandList_DX12 = { allocator[BUFFERCOUNT][QUEUE_COUNT]
+  │                                  commandList[QUEUE_COUNT]
+  │                                  DescriptorBinder, ... }
+  │
+  ├─ WaitCommandList(cmd_A, cmd_B)   ← GPU 실행 순서 보장 (GPU-side)
+  └─ SubmitCommandLists()            ← 프레임 끝에 모든 큐를 GPU에 제출
+
+[중간 — 엔진 DX12 내부]
+  CommandQueue::submit()             ← submit_cmds 모아서 ExecuteCommandLists() 호출
+
+[하위 — DX12 API]
+  ID3D12CommandQueue (GPU Queue)     ← 실제 GPU 실행 파이프라인
+  ID3D12GraphicsCommandList          ← GPU에 전달되는 명령 버퍼
+  ID3D12CommandQueue::ExecuteCommandLists()  ← GPU에 직접 제출
+```
+
+### ExecuteCommandLists vs SubmitCommandLists vs queue.submit
+
+| 함수 | 레벨 | 역할 |
+|------|------|------|
+| `ID3D12CommandQueue::ExecuteCommandLists()` | **디바이스 레벨** (그래픽 API 직접 호출) | 커맨드 리스트를 GPU 큐에 **직접 제출** |
+| `device->BeginCommandList()` | **엔진 백엔드 API** — 외부에 노출됨 | CPU 스레드에서 커맨드 기록 시작, `CommandList` 핸들 반환 |
+| `device->WaitCommandList(A, B)` | **엔진 백엔드 API** — 외부에 노출됨 | **GPU 실행 순서 보장**: A가 실행되기 전 B의 완료를 GPU가 대기 |
+| `GraphicsDevice_DX12::SubmitCommandLists()` | **엔진 백엔드 API** — 외부에 노출됨 | 프레임 전체의 모든 큐 submit + fence signal + present + **CPU wait** |
+| `CommandQueue::submit()` | **엔진 백엔드 API** — 내부용 (노출 안됨) | `submit_cmds`에 모인 커맨드 리스트를 `ExecuteCommandLists()`로 **일괄 제출** |
+
+관계:
+
+```text
+SubmitCommandLists()                    ← 프레임 끝에 1번 호출 (CPU 레벨에서 대기 포함)
+  └─ queue.submit()                     ← 각 큐별로 호출
+       └─ queue->ExecuteCommandLists()  ← DX12 API
+```
+
+---
+
 ## 요약
 
 | 개념 | 역할 |

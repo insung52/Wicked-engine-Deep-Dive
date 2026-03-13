@@ -32,50 +32,7 @@ CPU 메모리에 있는 데이터(텍스처, 버퍼)를 **GPU 메모리(VRAM)로
 ---
 
 ## 배경 지식: 큐/커맨드 관련 함수 정리
-
-### 레이어 개요
-
-이 엔진에는 "커맨드 리스트"라는 이름이 두 군데 나온다. 레이어를 먼저 구분한다.
-
-```
-[최상위 — 셰이더 엔진 레벨]
-  CommandList (= 정수 ID)            ← BeginCommandList()로 받는 핸들
-  │  내부적으로 CommandList_DX12 = { allocator[BUFFERCOUNT][QUEUE_COUNT]
-  │                                  commandList[QUEUE_COUNT]
-  │                                  DescriptorBinder, ... }
-  │
-  ├─ WaitCommandList(cmd_A, cmd_B)   ← GPU 실행 순서 보장 (GPU-side)
-  └─ SubmitCommandLists()            ← 프레임 끝에 모든 큐를 GPU에 제출
-
-[중간 — 엔진 DX12 내부]
-  CommandQueue::submit()             ← submit_cmds 모아서 ExecuteCommandLists() 호출
-
-[하위 — DX12 API]
-  ID3D12CommandQueue (GPU Queue)     ← 실제 GPU 실행 파이프라인
-  ID3D12GraphicsCommandList          ← GPU에 전달되는 명령 버퍼
-  ID3D12CommandQueue::ExecuteCommandLists()  ← GPU에 직접 제출
-```
-
-### ExecuteCommandLists vs SubmitCommandLists vs queue.submit
-
-| 함수 | 레벨 | 역할 |
-|------|------|------|
-| `ID3D12CommandQueue::ExecuteCommandLists()` | **디바이스 레벨** (그래픽 API 직접 호출) | 커맨드 리스트를 GPU 큐에 **직접 제출** |
-| `device->BeginCommandList()` | **엔진 백엔드 API** — 외부에 노출됨 | CPU 스레드에서 커맨드 기록 시작, `CommandList` 핸들 반환 |
-| `device->WaitCommandList(A, B)` | **엔진 백엔드 API** — 외부에 노출됨 | **GPU 실행 순서 보장**: A가 실행되기 전 B의 완료를 GPU가 대기 |
-| `GraphicsDevice_DX12::SubmitCommandLists()` | **엔진 백엔드 API** — 외부에 노출됨 | 프레임 전체의 모든 큐 submit + fence signal + present + **CPU wait** |
-| `CommandQueue::submit()` | **엔진 백엔드 API** — 내부용 (노출 안됨) | `submit_cmds`에 모인 커맨드 리스트를 `ExecuteCommandLists()`로 **일괄 제출** |
-
-관계:
-
-```
-SubmitCommandLists()                    ← 프레임 끝에 1번 호출 (CPU 레벨에서 대기 포함)
-  └─ queue.submit()                     ← 각 큐별로 호출
-       └─ queue->ExecuteCommandLists()  ← DX12 API
-```
-
-CopyAllocator는 프레임 루프와 무관하게 **`ExecuteCommandLists()`를 직접 호출**함.
-"지금 복사해 → 기다려 → 끝" 흐름을 단독으로 처리하기 때문.
+**참고 문서:** [Part 3: GPU와 통신하기 - 3.9 엔진의 커맨드 리스트 추상화 레이어](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part3_gpu_communication.md#39-엔진의-커맨드-리스트-추상화-레이어)
 
 ### WaitCommandList 메커니즘 — GPU 내부 순서 보장 (GraphicsDevice_DX12.cpp:6091)
 
@@ -93,6 +50,8 @@ void GraphicsDevice_DX12::WaitCommandList(CommandList cmd, CommandList wait_for)
 - `SubmitCommandLists()` 내부에서 `queue->Wait(fence, value)` 형태로 GPU 큐에 등록됨
 
 ### jobsystem과 WaitCommandList의 관계 (Renderer.cpp)
+
+**참고 문서:** [Appendix: jobsystem (Wicked Engine 자체 스레드 풀)](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/jobsystem.md)
 
 ```cpp
 jobsystem::context ctx;
