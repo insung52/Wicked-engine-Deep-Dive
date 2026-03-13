@@ -272,6 +272,27 @@ device->WaitCommandList(cmd_copypages, cmd_이전작업);
 
 GPU 리소스(커맨드리스트, fence, 업로드 버퍼) 생성이 비싸므로 한 번 만든 것을 계속 돌려씀.
 
+### freelist의 생명 주기와 하이워터마크 (High-Water Mark)
+
+`freelist`에 들어간 객체들은 게임이 실행되는 도중에는 **결코 메모리 해제(free)되지 않는다.**
+완전히 해제되는 시점은 오직 엔진(프로그램)이 종료될 때 뿐이다.
+
+- **이유:** 로딩 화면에서 대량의 `CopyCMD`가 생성되었다가 반납되면, 이 객체들은 그대로 창고(freelist)에 쌓여 메모리를 차지한다. 자칫 메모리 낭비처럼 보일 수 있으나, 이는 다음 번 로딩 시 메모리 재할당 오버헤드를 없애기 위한 **필수적인 캐싱 전략**이다. 
+- 게임 엔진은 일반적으로 프로그램 수명 주기 동안 가장 많이 필요했던 순간(최대 수위, High-Water Mark)만큼의 풀(Pool) 크기를 계속 유지하여 렌더링 도중 끊김(Stall)을 방지한다.
+
+---
+
+## CopyCMD의 `uploadbuffer` (Staging Buffer)
+
+`CopyCMD` 구조체 안에서 가장 중요한 역할을 하며, 가장 많은 메모리를 차지하는 것이 바로 `GPUBuffer uploadbuffer`다. 
+이것은 하드웨어 관점에서 볼 때 **Staging Buffer(임시 정거장/상하차장)** 역할을 수행한다.
+
+1. **직접 접근 불가:** CPU는 속도가 매우 빠른 GPU 전용 메모리(`DEFAULT` Heap)에 직접 포인터로 접근하여 데이터를 쓸 수 없다.
+2. **해결책:** CPU가 PCI-Express 통신망을 통해 직접 접근할 수 있는 넓은 앞마당(`UPLOAD` Heap)을 만드는데, 이것이 `uploadbuffer`다.
+3. **복사 과정:** CPU 수만 개의 텍스처 단위 픽셀 배열을 직접 이 `uploadbuffer`에 쏟아부어 놓고(memcpy), DMA 복사 엔진에 지시를 내려 GPU 내부에서 고속으로 전용 메모리 창고(`DEFAULT` Heap)로 퍼 나르게 한다.
+
+결국 CopyCMD 객체를 매번 새로 할당하지 않고 `freelist`에 모아두고 재사용하는 주된 이유도 바로 이 거대한 메모리 덩어리인 `uploadbuffer`를 매번 힙에 할당(new)하고 지우는(delete) 비용이 너무 크기 때문이다.
+
 ---
 
 ## 변경 전 상태 (VizMotive 원본)
