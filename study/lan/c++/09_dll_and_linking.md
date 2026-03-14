@@ -269,7 +269,97 @@ struct shared_ptr {
 
 ---
 
-## 8. 정리
+## 8. Import Library (.lib)와 런타임 DLL 호출 흐름
+
+### Import Library란
+
+DLL을 빌드하면 두 파일이 생성된다:
+
+```
+GBackendDX12.dll   ← 실제 코드가 들어있는 DLL
+GBackendDX12.lib   ← Import Library (작은 크기)
+```
+
+**Import Library**는 실제 코드가 없다. "이 심볼은 런타임에 GBackendDX12.dll에서 찾아라"는 정보만 담긴 작은 파일이다.
+
+다른 프로젝트가 GBackendDX12.dll의 exported 함수를 쓰려면:
+- 빌드 시: `GBackendDX12.lib`를 링크 설정에 추가
+- 배포 시: `GBackendDX12.dll`을 함께 배포
+
+```
+빌드 시 (링커):
+  GBackendDX12.lib를 보고 → "CreateGraphicsDevice는 GBackendDX12.dll에 있다" 기록
+  → app.exe나 Engine.dll 안에 이 정보가 포함됨
+
+런타임 (OS):
+  app.exe 실행 → OS가 GBackendDX12.dll 로드
+  → Import Table에 기록된 심볼들의 실제 주소를 채워넣음
+  → 이후 호출 시 해당 주소로 점프
+```
+
+### 런타임에 dllexport 함수가 호출될 때 실제 흐름
+
+```
+Engine.dll이 register_shared_block_allocator()를 export했다고 가정:
+
+GBackendDX12.dll 코드 실행 중:
+  register_shared_block_allocator(&texture_allocator) 호출
+       ↓
+  [GBackendDX12.dll 메모리] → [Engine.dll 메모리로 점프]
+       ↓
+  Engine.dll의 register_shared_block_allocator 코드 실행
+  block_allocators[id] = &texture_allocator  ← Engine.dll의 메모리에 씀
+       ↓
+  [Engine.dll 메모리] → [GBackendDX12.dll 메모리로 복귀]
+```
+
+**핵심**: 함수 호출 시 실행되는 코드와 접근하는 데이터는 **그 함수가 정의된 DLL의 것**이다.
+`register_shared_block_allocator`가 Engine.dll에 있으므로, 어느 DLL이 호출하든 Engine.dll의 `block_allocators[]`에 쓴다.
+
+### 이것이 교수님 방식을 가능하게 하는 이유
+
+```
+현재 (문제):
+  block_allocators[] → Allocator.h (inline) → DLL마다 별도 인스턴스
+  GBackendDX12.dll이 자기 인스턴스에 등록
+  Engine.dll이 자기 인스턴스에서 조회 → nullptr
+
+교수님 방식:
+  block_allocators[] → Allocator.cpp (Engine.dll에 컴파일) → 인스턴스 하나
+  register_shared_block_allocator() → Engine.dll에서 dllexport
+
+  GBackendDX12.dll 초기화:
+    register_shared_block_allocator(&texture_allocator) 호출
+    → Engine.dll 코드 실행 → Engine.dll의 block_allocators[0] = &texture_allocator
+
+  Engine.dll에서 inc_refcount:
+    block_allocators[0]->inc_refcount(ptr)
+    → 자기 자신(Engine.dll)의 배열 조회 → &texture_allocator 찾음 → 정상
+```
+
+변수 자체가 Engine.dll 메모리에 하나만 존재하고, 등록 함수도 Engine.dll에서 실행되므로 항상 같은 배열을 본다.
+
+### 변수 export vs 함수 export
+
+변수도 dllexport 가능하지만 함수 export보다 까다롭다:
+
+```cpp
+// 변수 export (가능하지만 비권장)
+ENGINE_API extern SharedBlockAllocator* block_allocators[256];
+
+// 함수 export로 감싸기 (교수님 방식, 권장)
+ENGINE_API uint8_t register_shared_block_allocator(SharedBlockAllocator* allocator);
+ENGINE_API SharedBlockAllocator* get_shared_block_allocator(uint8_t id);
+```
+
+함수로 감싸면:
+- 변수의 내부 구현을 숨길 수 있음 (배열 크기, 타입 변경 자유로움)
+- 경계 검사, 동기화 등 부가 로직 추가 가능
+- C++ 특유의 name mangling 문제를 피할 수 있음
+
+---
+
+## 10. 정리
 
 | 개념 | 요약 |
 |------|------|
@@ -282,3 +372,5 @@ struct shared_ptr {
 | `inline` 변수 | 헤더에 정의 가능, ODR 면제 — 단, **DLL마다 별도 인스턴스** |
 | `extern` | "다른 곳에 정의가 있다"는 선언, 링커가 하나의 정의에 연결 |
 | DLL 경계 문제 | 같은 inline 변수도 DLL마다 다른 인스턴스 → 전역 공유 불가 |
+| Import Library (.lib) | DLL 빌드 시 함께 생성. 실제 코드 없음 — "이 심볼은 런타임에 저 DLL에서 찾아라"는 정보만 포함 |
+| dllexport 함수 호출 시 | 호출한 DLL의 코드 → 함수가 정의된 DLL의 코드로 점프 → 그 DLL의 데이터에 접근 → 복귀 |

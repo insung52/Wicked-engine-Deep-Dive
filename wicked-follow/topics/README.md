@@ -42,6 +42,7 @@ Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이�
 | [appendix_block_allocator](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_block_allocator.md) | Block Allocator 개념 |
 | [appendix_bindless_resources_and_deferred_deletion](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_bindless_resources_and_deferred_deletion.md) | Bindless 리소스 & 지연 삭제 |
 | [appendix_dll_boundary](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_dll_boundary.md) | DLL 경계 이슈 |
+| [appendix_vizmotive_structure](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/appendix/appendix_vizmotive_structure.md) | VizMotive 전체 구조 (DLL 구성, EngineCore 필터) |
 
 ---
 
