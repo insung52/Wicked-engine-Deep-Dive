@@ -134,28 +134,96 @@ bool DeinitEngineLib()
 
 ### 그런데 왜 WickedEngine 방식을 아직도 쓸 수 없는가
 
-소멸 시점은 안전해도, 문제는 **프로그램 실행 중**에 발생한다.
+소멸 순서 고정은 **종료 시점**의 문제만 해결한다.
+WickedEngine 방식의 실제 크래시는 **프로그램이 정상 동작하는 도중**에 발생한다.
 
-Engine.dll 코드에서 Texture를 복사하는 순간 이미 크래시:
+#### 무슨 일이 일어나는가
+
+엔진이 실행 중인 매 프레임, Engine.dll 코드는 Texture 객체를 복사한다.
 
 ```cpp
 // EngineCore/Components/TextureComponent.cpp:168
-// (프로그램이 정상 동작하는 중, 아직 아무것도 소멸되지 않은 상태)
 graphics::Texture texture = resource.GetTexture();
-//                          ↑ Texture 복사 → shared_ptr 복사생성자 → inc_refcount 호출
-//                            → Engine.dll의 block_allocators[id] 조회
-//                            → 비어있음! → 크래시
 ```
 
-DestroyAll()이 먼저 실행되든 나중에 실행되든, 평소 동작 중에 이미 터진다.
+`graphics::Texture`는 내부에 `shared_ptr<void> internal_state`를 멤버로 갖는다.
+`shared_ptr`를 복사하면 C++ 언어 규칙에 의해 **복사 생성자가 자동으로 호출**된다.
+복사 생성자는 `inc_refcount`를 호출해야 한다 — 같은 객체를 가리키는 포인터가 하나 더 생겼으니 참조 횟수를 올려야 하기 때문이다.
+
+WickedEngine 방식에서 `inc_refcount`는 이렇게 동작한다:
 
 ```
-프로그램 실행 흐름:
-  앱 시작 → [정상 동작 중] → 앱 종료
-              ↑
-              여기서 Texture 복사 → 크래시
-              (DestroyAll/Deinit 순서와 무관)
+handle에서 하위 8비트 추출 → allocator_id 획득
+→ block_allocators[allocator_id] 조회
+→ 찾은 allocator의 inc_refcount 호출
 ```
+
+여기서 DLL 경계 문제가 발생한다.
+
+`block_allocators[]`는 `Allocator.h`에 `inline` 변수로 선언되어 있다.
+
+```cpp
+// Allocator.h
+inline SharedBlockAllocator* block_allocators[256] = {};
+```
+
+`Allocator.h`는 Engine.dll과 GBackendDX12.dll 양쪽 모두 `#include`한다.
+그런데 두 DLL은 **각자 독립적으로 빌드**된다 — 각자의 링크 단계에서 헤더를 따로 처리한다.
+그 결과 `block_allocators[]`의 인스턴스가 **DLL마다 하나씩 별도로 생성**된다.
+
+```
+Engine.dll 빌드 완료:
+  → block_allocators[256] 인스턴스 A (전부 nullptr)
+
+GBackendDX12.dll 빌드 완료:
+  → block_allocators[256] 인스턴스 B (전부 nullptr)
+```
+
+이 두 배열은 **서로 다른 메모리 주소에 존재**한다. 이름이 같아도 완전히 별개의 변수다.
+
+앱이 실행되면:
+
+```
+GBackendDX12.dll 초기화:
+  texture_allocator 생성
+  → 인스턴스 B[0] = &texture_allocator  (B에 등록)
+
+Engine.dll에서 Texture 복사:
+  block_allocators[0] 조회
+  → Engine.dll 코드이므로 인스턴스 A를 봄
+  → 인스턴스 A[0] = nullptr  (A에는 아무것도 등록된 적 없음)
+  → nullptr->inc_refcount() → 크래시
+```
+
+GBackendDX12.dll이 인스턴스 B에 아무리 열심히 등록해도, Engine.dll은 인스턴스 A만 본다.
+두 DLL이 서로 다른 배열을 가리키고 있기 때문에, 등록 사실이 Engine.dll에 전달될 방법이 없다.
+
+결과: `nullptr->inc_refcount()` → 크래시.
+
+#### 소멸 순서와 무관한 이유
+
+소멸 순서 고정(`DestroyAll → backend → shaderEngine`)은 "종료 시점에 allocator가 아직 살아있을 때 GPU 리소스를 해제한다"는 보장이다.
+
+하지만 위 크래시는 종료와 아무 관련이 없다. 앱이 시작되고, 렌더링이 돌고, 아직 아무것도 소멸되지 않은 **정상 실행 중**에 Texture를 복사하는 순간 발생한다.
+
+```
+앱 시작
+  ↓
+GBackendDX12.dll: Texture_DX12 생성, block_allocators[0] = &texture_allocator 등록 (DX12.dll 배열에)
+  ↓
+Engine.dll: Texture 객체 생성, internal_state.handle = (ptr << 8) | 0
+  ↓
+Engine.dll: graphics::Texture texture = resource.GetTexture();  ← 복사
+              shared_ptr 복사 생성자 호출
+              block_allocators[0] 조회 (Engine.dll 배열)
+              → nullptr  ← DX12.dll 배열이 아님!
+              → 크래시
+  ↓
+(DestroyAll, Deinit은 여기까지 도달조차 못 함)
+```
+
+소멸 순서를 아무리 정교하게 설계해도 이 크래시를 막을 수 없다.
+문제의 원인이 "소멸 시점"이 아니라 "복사 시점에 잘못된 배열을 본다"는 것이기 때문이다.
 
 ---
 
