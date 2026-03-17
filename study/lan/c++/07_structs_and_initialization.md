@@ -116,3 +116,79 @@ for(const auto& w : words) {
     // w는 읽기 전용 참조! 문자열 복사가 전혀 안 일어남 (빠르고 안전함. C++ 루프의 표준 방식)
 }
 ```
+
+---
+
+## 5. 멤버 접근 연산자 (`.`, `->`, `::`)
+
+Java는 객체의 멤버(변수, 함수)에 접근할 때 마침표(`.`) 하나만 쓰지만, C++은 메모리 접근 방식(값 vs 포인터)이 중요하므로 상황에 따라 세 가지 연산자를 명확히 구분해서 사용해야 한다.
+
+1. **`.` (Dot Operator, 점 연산자)**: **객체(값) 자체** 또는 **레퍼런스(Reference)** 변수에서 멤버를 꺼낼 때 사용한다.
+2. **`->` (Arrow Operator, 화살표 연산자)**: **포인터(Pointer)** 가 가리키는 메모리 주소를 따라가서 멤버를 꺼낼 때 사용한다. (사실상 `(*ptr).member`의 축약형이다.)
+3. **`::` (Scope Resolution Operator, 범위 지정 연산자)**: 어떤 **소속**인지 명시할 때 쓴다. 구조체/클래스(형틀) 자체에 속한 **정적(static) 멤버**, **중첩 타입(enum 등)**, 또는 **네임스페이스** 안으로 접근할 때 사용한다.
+
+```cpp
+struct Player {
+    int hp;
+    void Move();
+    static int totalPlayers; // 모든 Player 인스턴스가 공유하는 정적 변수
+};
+
+// 정적 변수는 클래스 외부에서 메모리 할당(정의)이 필요함 (:: 사용)
+int Player::totalPlayers = 0; 
+
+void Test() {
+    Player p1;
+    p1.hp = 100;    // 1. 값(객체) 직접 접근 (.)
+    p1.Move();      // .
+
+    Player* ptr = &p1;
+    ptr->hp = 50;   // 2. 포인터 주소를 따라가서 접근 (->)
+    ptr->Move();    // ->
+
+    int count = Player::totalPlayers; // 3. 클래스 소속 정적 요소 접근 (::)
+}
+```
+
+---
+
+## 6. `this` 포인터와 정적(static) 멤버
+
+### `this`는 자바처럼 레퍼런스가 아니라 '포인터'다
+Java에서의 `this`는 현재 객체를 가리키는 숨겨진 키워드(레퍼런스)라 `this.hp`처럼 점(`.`)을 찍습니다.
+하지만 **C++에서의 `this`는 현재 객체의 메모리 주소를 담고 있는 숨겨진 '포인터'** 입니다.
+따라서 `this`를 사용해 멤버에 접근할 때는 반드시 화살표(`->`) 연산자를 써야 합니다.
+
+```cpp
+struct Monster {
+    int hp;
+    
+    void SetHP(int hp) {
+        // 매개변수 이름(hp)과 멤버 변수 이름(hp)이 같을 때 구분하는 방법
+        this->hp = hp; // this가 포인터이므로 -> 사용 (Java의 this.hp 가 아님!)
+    }
+    
+    Monster* GetPointer() {
+        return this; // 자기 자신의 메모리 주소를 반환할 때도 this 사용
+    }
+};
+```
+
+### 정적(static) 멤버 함수와 `this`
+클래스/구조체 내부에 선언된 `static` 함수는 특정 객체(Instance) 메모리에 묶여있지 않고, 프로그램 전체에서 클래스 이름 공간에 하나만 존재합니다.
+
+따라서 **`static` 함수 내부에는 `this` 포인터가 아예 존재하지 않습니다.**
+결과적으로 C++의 정적 함수 안에서는 객체 고유의 일반 멤버 변수(hp 등)를 직접 읽거나 쓸 수 없으며, 오직 다른 `static` 멤버 변수나 매개변수로 넘어온 데이터만 다룰 수 있습니다.
+
+```cpp
+struct SystemManager {
+    int normal_var = 10;
+    static int static_var;
+
+    static void DoWork() {
+        static_var = 20;    // (O) 정적 멤버 접근 가능
+        // normal_var = 20; // (X) 컴파일 에러! 어떤 객체의 normal_var인지 알 수 없음 (this 없음)
+    }
+};
+int SystemManager::static_var = 0; // 초기화
+```
