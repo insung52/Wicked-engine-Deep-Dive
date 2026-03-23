@@ -1,5 +1,7 @@
 # VizMotive 적용: 구조체 메모리 최적화
 
+**[Notebooklm pdf 문서 : struct optimization](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/struct_optimization.pdf)**
+
 ---
 
 ## 개요
