@@ -1135,6 +1135,78 @@ device->CreateShaderResourceView(depthBuffer, &depthSrvDesc, depthSrvHandle);
 
 ---
 
+## GPU Buffer Alignment (DX12)
+
+### SIZE vs ALIGNMENT — 핵심 구분
+
+CPU 메모리 정렬과 동일한 개념이다 (→ [07_structs_and_initialization.md #7](../../../study/lan/c++/07_structs_and_initialization.md)):
+- **SIZE** = 버퍼 데이터의 실제 바이트 수
+- **ALIGNMENT** = VRAM에서 버퍼가 시작해야 하는 주소의 제약 (N의 배수)
+
+둘은 완전히 독립적이다. 예를 들어 크기 100바이트짜리 상수 버퍼도 **256바이트 경계**에서 시작해야 한다.
+
+### DX12 실제 alignment 값
+
+| 상황 | alignment |
+|------|-----------|
+| 일반 버퍼 (VB, IB, SB 등) | 4 bytes (기본) |
+| 상수 버퍼 (CBV) | **256 bytes** — `D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT` |
+| Placed Resource (텍스처 등) | **4 KB** — `D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT` |
+| Small Texture (64KB 미만) | **4 KB** — `D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT` |
+| 일반 텍스처 (Placed) | **64 KB** — `D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT` |
+| MSAA 텍스처 | **4 MB** — `D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT` |
+
+최대값이 4MB이므로 alignment를 저장하는 필드는 `uint32_t`(최대 약 4.2GB)로 충분하다.
+
+### `GPUBufferDesc::alignment` 필드
+
+```cpp
+// GBackend.h
+struct GPUBufferDesc {
+    uint64_t size = 0;       // 버퍼 데이터 크기 (바이트)
+    uint32_t alignment = 0;  // VRAM 배치 시 요구되는 시작 주소 정렬값
+    // ...
+};
+```
+
+`alignment`는 `GetMinOffsetAlignment()` (DX12 드라이버 쿼리)의 반환값을 저장하기 위한 필드다.
+0이면 기본값(4바이트) 사용.
+
+**실제 흐름:**
+```
+CreateBuffer(desc) 호출
+  → D3D12 드라이버에 쿼리: GetMinOffsetAlignment()
+  → 반환값 → desc.alignment 에 저장
+  → CreatePlacedResource(..., alignment, ...)
+```
+
+### uint32_t로 충분한 이유
+
+DX12에서 alignment 최대값은 **4MB = 4,194,304 바이트**.
+`uint32_t` 최대값 = 4,294,967,295 (약 4GB) → 충분히 커버.
+`uint64_t`를 쓰면 불필요하게 8바이트 → 4바이트로 절약 가능.
+
+> **주의**: `alignment`를 `uint32_t`로 변경할 때는 `GPUBufferDesc` 구조체와
+> `GetMinOffsetAlignment()` 반환 타입 처리 코드 **두 곳을 함께** 수정해야 한다.
+
+### AlignUp 유틸리티
+
+버퍼 크기나 주소를 특정 alignment의 배수로 올림할 때 자주 사용되는 패턴:
+
+```cpp
+// WickedEngine / VizMotive 내부
+constexpr uint64_t AlignUp(uint64_t value, uint64_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+// 예: 상수 버퍼 크기를 256바이트로 올림
+uint64_t alignedSize = AlignUp(rawSize, 256);
+// rawSize=100 → alignedSize=256
+// rawSize=257 → alignedSize=512
+```
+
+---
+
 ## 요약
 
 | 개념 | 핵심 |
@@ -1146,6 +1218,7 @@ device->CreateShaderResourceView(depthBuffer, &depthSrvDesc, depthSrvHandle);
 | 디스크립터 힙 | 디스크립터 저장소, Shader Visible 여부 |
 | 리소스 상태 | 현재 용도, 배리어로 전이 필요 |
 | 텍스처 | 1D/2D/3D/Cube, Mipmap, 압축 포맷 |
+| GPU Alignment | SIZE와 독립적, CBV=256B, Placed=4KB/64KB, MSAA=4MB |
 
 ---
 

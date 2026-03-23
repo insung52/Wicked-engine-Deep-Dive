@@ -21,15 +21,21 @@ Graphics 객체 구조체의 불필요한 메모리 낭비를 제거한다.
 변경 3(GraphicsDeviceChild 제거)이 `vz::allocator::shared_ptr` 없이는 어렵기 때문에 이 순서가 중요하다.
 
 ```cpp
-// Topic-allocator-shared-ptr 브랜치 현재 상태:
+// Topic-allocator-shared-ptr 브랜치 merge 후 실제 상태:
 struct GraphicsDeviceChild
 {
-    vz::allocator::shared_ptr<void> internal_state;  // ← 이미 교체됨
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    vz::allocator::shared_ptr<void> internal_state;  // 8바이트 (uint64_t handle)
+    bool IsValid() const { return internal_state.IsValid(); }
+    // constexpr 없음:
+    //   IsValid() → get_shared_block_allocator() (UTIL_EXPORT 외부 함수) 호출
+    //   → constexpr 불가 (C3615)
 
     virtual ~GraphicsDeviceChild() = default;  // ← 아직 존재, vtable 원인
 };
 ```
+
+> **`shared_ptr` 크기 변화**: 1차 구현(16바이트 직접 포인터) → 피드백 후(8바이트 handle).
+> struct_optimization에서 구조체 크기를 계산할 때 `internal_state`는 **8바이트** 기준이다.
 
 ---
 
@@ -181,11 +187,11 @@ RaytracingPipelineState (internal_state, IsValid() 직접 보유)
 **GraphicsDeviceChild 삭제**, 각 구조체에 `internal_state`와 `IsValid()`를 직접 추가한다.
 
 ```cpp
-// 변경 전
+// 변경 전 (merge 후 실제 상태)
 struct GraphicsDeviceChild
 {
-    vz::allocator::shared_ptr<void> internal_state;
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    vz::allocator::shared_ptr<void> internal_state;  // 8바이트 handle
+    bool IsValid() const { return internal_state.IsValid(); }  // constexpr 아님
     virtual ~GraphicsDeviceChild() = default;
 };
 
@@ -222,7 +228,7 @@ struct Texture : public GPUResource
 struct Sampler
 {
     vz::allocator::shared_ptr<void> internal_state;
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    bool IsValid() const { return internal_state.IsValid(); }
 
     SamplerDesc desc;
     const SamplerDesc& GetDesc() const { return desc; }
@@ -231,7 +237,7 @@ struct Sampler
 struct Shader
 {
     vz::allocator::shared_ptr<void> internal_state;
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    bool IsValid() const { return internal_state.IsValid(); }
 
     ShaderStage stage = ShaderStage::Count;
 };
@@ -239,7 +245,7 @@ struct Shader
 struct GPUResource
 {
     vz::allocator::shared_ptr<void> internal_state;
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    bool IsValid() const { return internal_state.IsValid(); }
 
     enum class Type : uint8_t { ... } type = Type::UNKNOWN_TYPE;
     void* mapped_data = nullptr;
@@ -280,7 +286,7 @@ struct Texture final : public GPUResource    // final 추가!
 struct VideoDecoder
 {
     vz::allocator::shared_ptr<void> internal_state;
-    constexpr bool IsValid() const { return internal_state.IsValid(); }
+    bool IsValid() const { return internal_state.IsValid(); }
 
     VideoDesc desc;
     // ...
@@ -307,7 +313,19 @@ GPUBuffer는 보통:
 ### final을 왜 추가하는가?
 
 `GPUBuffer`와 `Texture`는 더 이상 상속할 계획이 없는 leaf 클래스다.
-`final`을 붙이면 컴파일러가 이 사실을 알고 가상 함수 호출을 **직접 호출(devirtualization)**로 최적화할 수 있다.
+
+단, 변경 3에서 `GraphicsDeviceChild`의 `virtual ~`를 제거하면
+`GPUResource` → `GPUBuffer`/`Texture` 계층에 **가상 함수가 하나도 남지 않는다.**
+따라서 여기서의 `final` 효과는 **devirtualization이 아니라 상속 방지**다.
+
+```
+변경 3 완료 후 GPUBuffer/Texture:
+  가상 함수 없음 → vtable 없음 → devirtualize할 것 없음
+  final의 실제 효과: 실수로 더 파생하는 것을 컴파일 에러로 차단
+```
+
+> `devirtualization`이 실제로 적용되는 것은 **변경 4** (`Texture_DX12 final`, `BVH_DX12 final`)다.
+> `Resource_DX12`가 가상 함수를 가지고 있을 경우 `final`이 devirtualization을 가능하게 한다.
 
 > `GPUResource`에는 `final`을 붙이지 않는다. `GPUBuffer`와 `Texture`가 상속하고 있기 때문.
 
@@ -350,12 +368,15 @@ struct BVH_DX12 final : public Resource_DX12
 
 | 변경 | 파일 | 효과 |
 |------|------|------|
+| `internal_state` 8바이트로 축소 | Allocator.h (교수님 피드백) | **8바이트/객체 절약** (16→8, handle 인코딩) |
 | `BindFlag : uint8_t` | GBackend.h | 3바이트/사용처 절약 |
 | `GPUBufferDesc` 멤버 순서 재배치 | GBackend.h | 패딩 감소 (~12바이트) |
 | `alignment` uint64_t → uint32_t | GBackend.h, GBackendDevice.h | 4바이트 절약 |
 | `GraphicsDeviceChild` 제거 | GBackend.h | **8바이트/객체 절약** (vtable 제거) |
-| `GPUBuffer/Texture final` | GBackend.h | devirtualization 최적화 |
+| `GPUBuffer/Texture final` | GBackend.h | 추가 상속 방지 (가상 함수 제거 후 남은 가상 함수 없음 → devirtualization 아님) |
 | `operator delete = delete` | GBackend.h | 잘못된 힙 할당 컴파일 에러로 방지 |
 | `Texture_DX12/BVH_DX12 final` | GraphicsDevice_DX12.cpp | devirtualization 최적화 |
 
-10,000개 객체 기준: vtable 제거만으로도 **~80KB** 절약.
+10,000개 객체 기준:
+- vtable 제거: **~80KB** 절약
+- `internal_state` 8바이트 축소: **~80KB** 추가 절약 (두 변경이 독립적으로 누적됨)

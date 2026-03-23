@@ -192,3 +192,90 @@ struct SystemManager {
 };
 int SystemManager::static_var = 0; // 초기화
 ```
+
+---
+
+## 7. 메모리 정렬 (Memory Alignment)
+
+### 개념: SIZE와 ALIGNMENT는 별개다
+
+**SIZE** = 데이터가 차지하는 바이트 수
+**ALIGNMENT** = 데이터가 시작해야 하는 주소의 제약 (N의 배수)
+
+이 둘은 완전히 독립적이다.
+
+```cpp
+struct Example {
+    char   c;   // size=1, alignment=1
+    double d;   // size=8, alignment=8  ← 주소가 반드시 8의 배수여야 함
+    int    i;   // size=4, alignment=4
+};
+// sizeof(Example) = 24  (padding 때문에 1+7+8+4+4 = 24)
+```
+
+### 왜 alignment가 필요한가
+
+CPU는 메모리를 1바이트씩 읽지 않는다. **하드웨어 버스 너비 단위**(4바이트, 8바이트 등)로 읽는다.
+만약 `double`이 주소 1에서 시작하면 CPU는 2번 읽어서 조합해야 한다 (느림 + 일부 아키텍처는 크래시).
+그래서 컴파일러가 자동으로 **패딩(padding)** 바이트를 삽입해 정렬을 맞춰준다.
+
+```
+주소: 0   1   2   3   4   5   6   7   8   9  10  11
+     [c] [pad pad pad pad pad pad pad] [d d d d d d d d] ...
+      ↑                               ↑
+      char(1B)     padding(7B)        double(8B) — 주소 8에서 시작 = 8의 배수 ✓
+```
+
+### struct 멤버 순서로 크기가 달라진다
+
+```cpp
+struct Bad {   // 24바이트
+    char   a;  // 1B + padding 7B
+    double b;  // 8B
+    char   c;  // 1B + padding 7B
+    double d;  // 8B
+};
+
+struct Good {  // 18바이트 → 실제로는 정렬 때문에 24바이트가 아닌 20바이트
+    double b;  // 8B (먼저 배치)
+    double d;  // 8B
+    char   a;  // 1B
+    char   c;  // 1B + padding 2B (int 정렬 기준 맞추기)
+};
+// 규칙: 큰 멤버 먼저 배치하면 padding 낭비가 줄어듦
+```
+
+실제 계산보다는 **"큰 것 먼저, 작은 것 나중에"** 원칙을 기억하는 게 실용적이다.
+
+### `alignas` 키워드
+
+컴파일러 기본 정렬보다 더 강한 제약을 명시적으로 줄 때 사용한다.
+
+```cpp
+// 구조체 전체에 적용: 시작 주소를 256의 배수로 강제
+struct alignas(256) ConstantBuffer {
+    float4 worldMatrix;
+    float4 viewMatrix;
+};
+// → 이 구조체를 배열로 놓으면 각 원소가 256바이트 경계에 정렬됨
+
+// 멤버 하나에 적용:
+struct alignas(16) Vec4 {
+    float x, y, z, w;
+};
+```
+
+**VizMotive 실제 사용 예:**
+`Allocator.h`의 `SharedHeapAllocator::RawStruct`에 `alignas(256)` 적용.
+GPU 상수 버퍼는 DX12 요구사항에 따라 256바이트 경계에 배치되어야 하기 때문이다.
+
+### `sizeof` vs `alignof`
+
+```cpp
+struct alignas(16) Vec4 { float x, y, z, w; };
+
+sizeof(Vec4)  // 16 — 데이터 크기
+alignof(Vec4) // 16 — 정렬 요구사항
+
+// sizeof는 항상 alignof의 배수다 (패딩 포함하기 때문)
+```
