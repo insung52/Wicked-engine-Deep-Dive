@@ -279,3 +279,106 @@ alignof(Vec4) // 16 — 정렬 요구사항
 
 // sizeof는 항상 alignof의 배수다 (패딩 포함하기 때문)
 ```
+
+---
+
+## 8. 상속, virtual, override, final
+
+### 기본 상속
+
+```cpp
+struct Base {
+    int x;
+    void foo() { /* Base의 foo */ }
+};
+
+struct Derived : Base {
+    int y;
+    void foo() { /* Derived의 foo — Base::foo를 가린다(hiding) */ }
+};
+```
+
+- `Derived`는 `Base`의 멤버(`x`, `foo`)를 모두 상속받는다.
+- 그러나 `Derived::foo()`는 `Base::foo()`를 **오버라이드한 게 아니다** — 이름만 같은 별개 함수(name hiding).
+
+### virtual — 오버라이드를 가능하게 하는 키워드
+
+`virtual`이 없으면 **정적 바인딩(컴파일 시 결정)**: 포인터 타입 기준으로 함수가 호출된다.
+`virtual`이 있으면 **동적 바인딩(런타임 결정)**: 실제 객체 타입 기준으로 함수가 호출된다.
+
+```cpp
+struct Base {
+    virtual void foo() { /* Base */ }  // virtual 선언
+};
+
+struct Derived : Base {
+    void foo() override { /* Derived */ }  // override 키워드: 의도 명시
+};
+
+Base* ptr = new Derived();
+ptr->foo();  // → Derived::foo() 호출 (동적 바인딩)
+```
+
+### non-virtual 함수는 오버라이드 불가
+
+```cpp
+struct Base {
+    void bar() { /* Base */ }  // non-virtual
+};
+
+struct Derived : Base {
+    void bar() { /* Derived */ }  // name hiding (오버라이드 아님!)
+};
+
+Base* ptr = new Derived();
+ptr->bar();  // → Base::bar() 호출! (정적 바인딩)
+```
+
+**VizMotive 실제 사례:** `Resource_DX12::destroy_subresources()`가 non-virtual이므로,
+`Texture_DX12`에서 같은 이름의 함수를 만들어도 `Base*` 포인터로 호출 시 `Resource_DX12` 버전이 호출된다.
+→ `apply_texture.md` 참고
+
+### vptr과 vtable — virtual의 비용
+
+`virtual` 함수가 있는 클래스의 모든 인스턴스는 **vptr(가상 함수 테이블 포인터)** 8바이트를 갖는다.
+vptr은 vtable(함수 포인터 배열)을 가리킨다. 런타임에 vtable을 통해 실제 함수를 찾는다.
+
+```
+Resource_DX12 인스턴스 메모리:
+[vptr(8B)] [멤버들...]
+    ↓
+  vtable: [ &Resource_DX12::destroy_subresources, ... ]
+```
+
+GPU 리소스처럼 수천 개가 생성되는 객체에 불필요한 virtual을 추가하면 메모리/캐시 낭비가 된다.
+
+### `override` 키워드 (C++11)
+
+```cpp
+struct Derived : Base {
+    void foo() override;  // Base에 virtual foo()가 없으면 컴파일 에러
+};
+```
+
+실수로 함수 시그니처가 달라서 오버라이드 실패하는 버그를 컴파일 시점에 잡아준다.
+
+### `final` 키워드 (C++11)
+
+```cpp
+// 클래스에 final: 더 이상 상속 불가
+struct Texture_DX12 final : Resource_DX12 { ... };
+
+// 함수에 final: 이 함수를 하위 클래스에서 오버라이드 불가
+virtual void foo() final;
+```
+
+클래스에 `final`이 붙으면 컴파일러가 가상 함수 호출을 devirtualize(정적 바인딩으로 최적화)할 수 있다.
+
+### 요약 표
+
+| | non-virtual | virtual |
+|---|---|---|
+| 바인딩 시점 | 컴파일 타임 (정적) | 런타임 (동적) |
+| 파생 클래스 재정의 | name hiding (오버라이드 아님) | `override`로 진짜 오버라이드 |
+| vptr 비용 | 없음 | 인스턴스당 8바이트 |
+| `Base*`로 호출 시 | Base 버전 호출 | 실제 타입 버전 호출 |

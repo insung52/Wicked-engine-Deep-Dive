@@ -181,6 +181,7 @@ Texture_DX12 : Resource_DX12
 
 `destroy_subresources()`는 `Resource_DX12`에 정의되어 있고,
 **non-virtual 함수**이므로 `Texture_DX12`에서 오버라이드할 수 없다.
+(→ C++ 상속/virtual 개념: [07_structs_and_initialization.md #8](../../study/lan/c++/07_structs_and_initialization.md#8-상속-virtual-override-final))
 
 ```cpp
 // GraphicsDevice_DX12.cpp:1340
