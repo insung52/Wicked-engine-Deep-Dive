@@ -223,6 +223,8 @@ if (internal_state->resource != nullptr)
 버퍼의 특정 범위(subresource)를 Root Descriptor SRV/UAV로 바인딩할 때
 byte offset이 무시된다.
 
+실제 그런 경우가 생기나?
+
 **예시 상황:**
 
 ```
@@ -457,3 +459,7 @@ Root Descriptor는 날(raw) GPU 주소를 전달하므로, `gpu_address + byte_o
 CBV는 `table.CBV_offset[]`이라는 별도 배열에 offset을 저장한다.
 SRV/UAV와 달리 subresource index가 없고, `BindConstantBuffer(buffer, slot, offset)` 호출 시 offset을 직접 전달하기 때문이다.
 SRV/UAV는 `CreateSubresource()` 결과로 얻은 subresource index를 통해 offset을 관리한다.
+
+
+const PipelineState* active_pso = {};
+

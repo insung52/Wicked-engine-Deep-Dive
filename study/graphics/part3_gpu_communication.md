@@ -1175,6 +1175,87 @@ swapChainDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;   // 10비트
 swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
 ```
 
+### DXGI_USAGE 플래그 — 스왑체인 버퍼 용도 지정
+
+스왑체인 생성 시 `BufferUsage` 필드로 버퍼를 어떻게 쓸지 선언한다.
+
+| 플래그 | 의미 | 기본값 |
+|--------|------|--------|
+| `DXGI_USAGE_RENDER_TARGET_OUTPUT` | RTV(Render Target View)로 사용 — GPU가 **쓰기** 가능 | 항상 필요 |
+| `DXGI_USAGE_SHADER_INPUT` | SRV(Shader Resource View)로 사용 — 셰이더에서 **읽기** 가능 | 기본 없음 |
+| `DXGI_USAGE_UNORDERED_ACCESS` | UAV로 사용 — compute shader에서 읽기/쓰기 | 기본 없음 |
+
+```cpp
+// 일반적인 스왑체인 (쓰기만)
+swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+
+// 셰이더에서 읽기도 허용 (후처리, 스크린샷 등)
+swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
+```
+
+**왜 기본값이 RTV만인가?**
+스왑체인 버퍼는 DXGI(운영체제 디스플레이 인프라)가 직접 모니터에 flip하는 특수 버퍼다.
+`SHADER_INPUT`을 추가하면 DXGI가 내부적으로 추가 처리(aliasing 방지 등)를 해야 해서
+드라이버 비용이 약간 증가한다. 필요할 때만 추가하는 게 원칙.
+
+> **참고**: `DXGI_SWAP_EFFECT_FLIP_DISCARD` 모드(현대 DX12 표준)에서
+> `SHADER_INPUT` 플래그가 지원된다. 구식 `SEQUENTIAL` 모드는 플랫폼/드라이버에 따라 제한될 수 있음.
+
+---
+
+### RTV vs SRV — 버퍼를 어떤 방향으로 보느냐
+
+같은 GPU 메모리를 **어떤 View(뷰)**로 바라보느냐에 따라 쓰임이 달라진다.
+
+```
+백버퍼 GPU 메모리 (R8G8B8A8_UNORM, 1920×1080)
+        │
+        ├── RTV (Render Target View)
+        │     → GPU가 렌더링 결과를 여기에 출력  (= 쓰기)
+        │     → RenderPassBegin() 에서 사용
+        │
+        └── SRV (Shader Resource View)
+              → 셰이더가 이 내용을 텍스처로 읽음  (= 읽기)
+              → GetDescriptorIndex() → bindless index로 셰이더에 전달
+```
+
+**중요**: RTV와 SRV는 동시에 같은 버퍼를 바라볼 수 없다 (Resource State 충돌).
+읽기가 끝난 후 → Barrier → 쓰기 상태로 전환해야 한다.
+
+```
+[렌더링] RTV 상태 → 백버퍼에 그림
+    ↓ Barrier: RENDER_TARGET → SHADER_RESOURCE
+[읽기]  SRV 상태 → 셰이더에서 읽음  (후처리 pass)
+    ↓ Barrier: SHADER_RESOURCE → PRESENT
+[Present]
+```
+
+---
+
+### 중간 RT(Intermediate Render Target) 패턴
+
+**왜 중간 RT가 필요한가:**
+HDR 렌더링 결과를 바로 스왑체인에 쓸 수 없는 이유가 여럿 있다.
+
+1. **포맷 불일치**: 렌더링은 `R11G11B10_FLOAT`(HDR 고정밀도)로 하고 스왑체인은 `R8G8B8A8_UNORM`(LDR 8비트)
+2. **Compute shader → UAV 필요**: Tonemapper가 compute shader이면 UAV 출력이 필요한데 스왑체인은 UAV 불가
+3. **후처리 체이닝**: TAA → 블룸 → 토네맵 → FXAA 등을 ping-pong 방식으로 거치려면 중간 버퍼가 필요
+
+```
+rtMain (R11G11B10_FLOAT, HDR)   ← 렌더링 결과
+    ↓  compute tonemap (UAV 필요 → 스왑체인 직접 불가)
+rtPostprocess (R8G8B8A8_UNORM, LDR)   ← 중간 RT
+    ↓  image::Draw / blit (graphics shader + RTV)
+swapchain (R8G8B8A8_UNORM)   ← 최종 출력
+```
+
+**중간 RT를 없애고 싶다면?**
+- Graphics shader(pixel shader)를 마지막 패스로 쓰고 swapchain을 RTV로 직접 쓰면
+  중간 RT를 건너뛸 수 있다.
+- Compute shader 기반 처리는 swapchain에 직접 UAV 쓰기가 안 되므로 항상 중간 RT 필요.
+
+---
+
 ### 리사이즈 처리
 
 ```cpp

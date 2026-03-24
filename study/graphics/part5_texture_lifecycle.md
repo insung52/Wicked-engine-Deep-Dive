@@ -14,35 +14,35 @@
 [디스크]          [CPU 메모리]         [GPU 메모리]               [화면]
   │                   │                    │
   ▼                   │                    │
-PNG / DDS 파일         │                   │
-  │                   │                   │
-  │  파일 읽기 +       │                   │
-  │  디코딩            │                   │
-  ├──────────────▶  픽셀 데이터            │
-  │               (RGBA 배열)              │
-  │                   │                   │
-  │           Upload heap에 복사           │
-  │               ├──────────────────▶  Upload Heap (선형)
-  │               │                    스테이징 버퍼
-  │               │                       │
-  │               │     CopyTextureRegion │
-  │               │     (GPU 복사 명령)   │
-  │               │                       ├───────▶ DEFAULT Heap (타일드)
-  │               │                       │        ID3D12Resource (텍스처)
-  │               │                       │
-  │               │              Resource Barrier
-  │               │          (COPY_DEST → SHADER_RESOURCE)
-  │               │                       │
-  │               │                  Descriptor 생성
-  │               │                  (SRV 핸들)
-  │               │                       │
-  │               │              셰이더에서 SRV로 샘플링
-  │               │                       │
-  │               │               렌더 결과 → SwapChain 백버퍼
-  │               │                                    │
-  │               │                               Present()
-  │               │                                    ▼
-  │               │                               [화면 출력]
+PNG / DDS 파일         │                    │
+  │                   │                    │
+  │  파일 읽기 +       │                    │
+  │  디코딩            │                    │
+  ├──────────────▶  픽셀 데이터             │
+  │               (RGBA 배열)               │
+  │                   │                    │
+  │           Upload heap에 복사            │
+  │                  ├───────────────▶  Upload Heap (선형)
+  │                  │                    스테이징 버퍼
+  │                  │                     │
+  │                  │  CopyTextureRegion  │
+  │                  │   (GPU 복사 명령)    │
+  │                  │                     ├───────▶ DEFAULT Heap (타일드)
+  │                  │                     │        ID3D12Resource (텍스처)
+  │                  │                     │
+  │                  │              Resource Barrier
+  │                  │          (COPY_DEST → SHADER_RESOURCE)
+  │                  │                     │
+  │                  │              Descriptor 생성
+  │                  │               (SRV 핸들)
+  │                  │                     │
+  │                  │           셰이더에서 SRV로 샘플링
+  │                  │                     │
+  │                  │               렌더 결과 → SwapChain 백버퍼
+  │                  │                                    │
+  │                  │                               Present()
+  │                  │                                    ▼
+  │                  │                               [화면 출력]
 ```
 
 각 단계를 하나씩 뜯어본다.
