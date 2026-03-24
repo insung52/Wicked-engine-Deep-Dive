@@ -150,7 +150,7 @@ const Texture& GetBackBuffer(const SwapChain* swapchain)
 | `GetBackBuffer()` 비용 | 매 호출마다 `make_shared` 힙 할당 | 기존 객체 참조 반환 (할당 0) |
 | DXGI_USAGE 플래그 | `RENDER_TARGET_OUTPUT`만 | `+ SHADER_INPUT` 추가 |
 | `dummyTexture` | 있음 (임시 반환용) | 제거됨 |
-| 셰이더에서 backbuffer 읽기 | 불가 | 가능 (SRV 바인딩) |
+| 셰이더에서 backbuffer 읽기 | 불가 | 가능 (SRV 바인딩) — 단, 실제로 사용되는 곳 없음 |
 | 코드 일관성 | 스왑체인 버퍼가 특수 취급 | 일반 Texture와 동일하게 관리 |
 
 ---
@@ -163,23 +163,24 @@ const Texture& GetBackBuffer(const SwapChain* swapchain)
 변경 후에는 둘 다 `Texture_DX12` 객체로 통일되어, 후처리 패스가 swapchain backbuffer와
 일반 RT를 구분 없이 다룰 수 있다.
 
-### 2. 셰이더-readable 백버퍼의 실제 사용처
+### 2. SRV가 실제로 사용되는지 여부
 
-```
-[프레임 렌더링 완료 → swapchain 백버퍼에 결과 있음]
-         ↓
-    Barrier: RENDER_TARGET → SHADER_RESOURCE
-         ↓
-[후처리 셰이더: backbuffer를 SRV로 읽어 추가 효과 적용]
-  예: 화면 공간 굴절, 유리 효과, 화면 스크린샷 처리
-         ↓
-    Barrier: SHADER_RESOURCE → PRESENT
-         ↓
-    Present()
-```
+코드를 직접 확인한 결과, WickedEngine에서 **backbuffer SRV가 셰이더에 바인딩되는 곳은 없다**.
 
-변경 전에는 이 흐름을 위해 별도 중간 RT에 backbuffer 내용을 복사해야 했다.
-변경 후에는 backbuffer를 SRV로 직접 사용하므로 복사 비용이 없다.
+| 사용처 | 실제 방식 | SRV 직접 사용? |
+|--------|----------|--------------|
+| CrossFade 화면 전환 (`wiApplication.cpp:334`) | `CopyResource` + COPY_SRC | ❌ |
+| 스크린샷 (`wiHelper.cpp:197`) | readback 복사 | ❌ |
+| HDR10 blit (`wiApplication.cpp:207`) | `rendertargetPreHDR10` SRV 사용 (backbuffer 아님) | ❌ |
+
+SRV descriptor는 버퍼당 할당되어 있지만(`srv.init(...)`) 실제로 `GetDescriptorIndex(SRV)`가
+backbuffer에 대해 호출되는 코드가 없다.
+
+**SRV 추가 이유**: 구조적 완전성 — 통합 `Texture_DX12` 객체는 RTV + SRV 양쪽을 갖도록 설계되어 있다.
+`DXGI_USAGE_SHADER_INPUT`의 성능 영향이 미미하므로 추가 비용 없이 인프라를 갖춰두는 방식이다.
+
+> 실제로 backbuffer를 셰이더에서 읽는 효과(화면 공간 굴절, 유리 효과 등)를 구현할 경우
+> 이 인프라가 즉시 활용된다. 현재는 미래를 위한 준비 상태.
 
 ### 3. `dummyTexture` 제거
 

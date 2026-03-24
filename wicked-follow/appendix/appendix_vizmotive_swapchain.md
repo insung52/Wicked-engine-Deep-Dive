@@ -120,16 +120,22 @@ rtMain (HDR float) → [compute, UAV] → rtPostprocess (LDR UNORM)
 
 ---
 
-## SRV 지원 추가 시 무엇이 달라지는가
+## 구조 최적화 시 무엇이 달라지는가
 
-### 달라지는 것 (구조적 개선)
+### WickedEngine vs VizMotive 접근 비교
 
-| 항목 | 현재 | SRV 추가 후 |
-|------|------|-------------|
-| `SwapChain_DX12` 내부 | `backBuffers[]` + `backbufferRTV[]` + `dummyTexture` | `textures[]` 통합 |
-| `GetBackBuffer()` 비용 | 매 호출 `make_shared` 힙 할당 | 기존 `textures[]` 참조 반환 |
-| DXGI_USAGE 플래그 | `RENDER_TARGET_OUTPUT`만 | `+ SHADER_INPUT` 추가 |
-| 스크린샷 효율 | READBACK 복사 필요 | 잠재적으로 SRV 직접 활용 가능 |
+WickedEngine은 구조 통합 시 SRV도 함께 추가했다.
+코드를 직접 확인한 결과, **WickedEngine에서도 backbuffer SRV를 셰이더에서 직접 읽는 곳은 없다**.
+(CrossFade와 스크린샷은 모두 `CopyResource` 방식 사용 — SRV 불필요)
+
+VizMotive는 불필요한 SRV를 생략하고 구조 통합만 적용한다.
+
+| 항목 | 현재 VizMotive | WickedEngine 방식 | VizMotive 적용 방식 |
+|------|--------------|-----------------|-------------------|
+| 내부 구조 | `backBuffers[]` + `backbufferRTV[]` + `dummyTexture` | `textures[]` (RTV + SRV) | `textures[]` (RTV만) |
+| `GetBackBuffer()` 비용 | 매 호출 `make_shared` 힙 할당 | 참조 반환 (할당 0) | 참조 반환 (할당 0) |
+| DXGI_USAGE 플래그 | `RENDER_TARGET_OUTPUT`만 | `+ SHADER_INPUT` 추가 | 변경 없음 |
+| SRV | 없음 | 있음 (미사용) | 없음 (의도적 생략) |
 
 ### 달라지지 않는 것 (현재 렌더링 파이프라인)
 
@@ -139,30 +145,16 @@ rtMain (HDR float) → [compute, UAV] → rtPostprocess (LDR UNORM)
 | 최종 `image::Draw` blit | Graphics pipeline이라 그대로 유지 |
 | HDR10 `rtRenderFinal_` 중간 RT | compose 결과 저장 RT 여전히 필요 |
 
-**결론**: 현재 VizMotive 렌더링 파이프라인은 backbuffer를 셰이더에서 읽는 코드가 없다.
-SRV 지원을 추가해도 **현재 렌더링 로직 자체는 바뀌지 않는다.**
-
-다만 다음 경우에 즉시 활용 가능:
-1. **스크린샷 효율 개선** — `GetBackBuffer()` 힙 할당 제거
-2. **코드 구조 정리** — `backBuffers/backbufferRTV/dummyTexture` → `textures[]` 통합
-3. **미래 효과 기반** — 화면 읽기 기반 굴절/반사/오버레이 효과 추가 시 인프라 준비
+**결론**: 현재 VizMotive 렌더링 파이프라인은 backbuffer를 셰이더에서 읽지 않는다.
+구조 통합으로 얻는 이점:
+1. **`GetBackBuffer()` 힙 할당 제거** — 참조 반환으로 변경
+2. **코드 구조 정리** — 분산된 3개 컨테이너 → `textures[]` 통합
+3. **SRV 생략** — `DXGI_USAGE_SHADER_INPUT` 없음, descriptor 슬롯 절약
 
 ---
 
-## 적용 판단 체크리스트
+## 적용 판단
 
-```
-□ 렌더링 파이프라인을 backbuffer 읽기 방향으로 바꿀 계획이 있는가?
-    YES → SRV 지원 추가 필수
-    NO  → 구조 정리 목적으로만 적용 여부 결정
+VizMotive에 적용할 내용: **`textures[]` 구조 통합 + `GetBackBuffer()` 참조 반환, SRV 없음**
 
-□ 스크린샷 빈도가 높은가? (매 프레임 또는 자주)
-    YES → GetBackBuffer() 힙 할당 제거 효과 있음
-    NO  → 영향 미미
-
-□ WickedEngine 코드와 최대한 일치시키고 싶은가?
-    YES → 적용 권장 (구조 동기화)
-    NO  → 필요할 때 적용
-```
-
-→ `apply_texture.md 변경 3` 참고
+→ 구체적인 코드 변경: `apply_texture.md 변경 3` 참고
