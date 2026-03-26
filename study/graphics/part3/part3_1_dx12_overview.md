@@ -1,6 +1,6 @@
 # Part 3-1: DX12 Overview and Core Objects
 
-> Previous: [Part 2](part2_graphics_pipeline.md) — Graphics Pipeline
+> Previous: [Part 2](../part2/part2_graphics_pipeline.md) — Graphics Pipeline
 > Index: [Part 3 Index](part3_index.md)
 > Next: [Part 3-2](part3_2_pso.md) — PSO
 

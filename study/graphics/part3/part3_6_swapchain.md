@@ -136,7 +136,7 @@ Swap chain buffers are special — DXGI flips them directly to the display. Addi
 
 > **Note**: `DXGI_SWAP_EFFECT_FLIP_DISCARD` (the modern DX12 standard) supports `SHADER_INPUT`. The older `SEQUENTIAL` mode may have restrictions depending on platform/driver.
 
-For a detailed analysis of the performance impact and why VizMotive skips this flag, see [appendix_rt_compression.md](../../wicked-follow/appendix/appendix_rt_compression.md).
+For a detailed analysis of the performance impact and why VizMotive skips this flag, see [appendix_rt_compression.md](../../../wicked-follow/appendix/appendix_rt_compression.md).
 
 ---
 
