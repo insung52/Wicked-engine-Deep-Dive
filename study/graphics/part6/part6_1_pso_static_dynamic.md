@@ -89,3 +89,5 @@ Draw C: PSO=X, renderpass=MRT_B  →  hash differs    — bind new PSO, update h
 ```
 
 Static PSO skips the hash check entirely — it uses a simple pointer comparison (`active_pso == pso`) to detect duplicates, which is cheaper.
+
+> **Important**: `pipeline_hash` only tracks whether the **GPU needs a new PSO bound** (i.e., whether to call `SetPipelineState`). It does **not** track whether `active_pso` is correct. These are two independent variables that can fall out of sync. See [Part 6-2 — What Can Clear active_pso](part6_2_active_pso_rootsig.md#what-can-clear-active_pso) for when and why that happens.

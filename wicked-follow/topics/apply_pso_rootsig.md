@@ -27,9 +27,11 @@ VizMotive에 실제로 적용할 변경 사항을 분석하고 적용한 기록.
 ## 배경 지식: PSO와 DescriptorBinder
 
 > **개념 참고 문서**
-> - PSO 기본 개념: [part3_gpu_communication.md §3.3](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part3_gpu_communication.md#33-pso-pipeline-state-object)
-> - Root Signature 기본: [part3_gpu_communication.md §3.4](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part3_gpu_communication.md#34-루트-시그니처-root-signature)
-> - 엔진 레벨 PSO 관리 (Static/Dynamic PSO, active_pso, rootsig_optimizer, DescriptorBinder): [part6_pso_engine_implementation.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/study/graphics/part6_pso_engine_implementation.md)
+> - PSO 기본 개념: [part3_2_pso.md](../../study/graphics/part3/part3_2_pso.md)
+> - Root Signature 기본: [part3_3_root_signature.md](../../study/graphics/part3/part3_3_root_signature.md)
+> - Static/Dynamic PSO, pipeline_hash: [part6_1_pso_static_dynamic.md](../../study/graphics/part6/part6_1_pso_static_dynamic.md)
+> - active_pso, Root Sig Optimizer: [part6_2_active_pso_rootsig.md](../../study/graphics/part6/part6_2_active_pso_rootsig.md)
+> - DescriptorBinder (record → flush): [part6_3_descriptor_binder.md](../../study/graphics/part6/part6_3_descriptor_binder.md)
 
 ### PSO(Pipeline State Object)란
 
@@ -78,6 +80,11 @@ Root Descriptor는 descriptor heap을 거치지 않아 바인딩이 빠르지만
 ---
 
 ## 1. Dynamic PSO 캐시 히트 시 active_pso 미갱신 버그
+
+> **Background concepts**
+> - [What is Dynamic PSO and pipeline_hash?](../../study/graphics/part6/part6_1_pso_static_dynamic.md#pipeline-hash--duplicate-binding-prevention)
+> - [What is active_pso and why must it be correct?](../../study/graphics/part6/part6_2_active_pso_rootsig.md#active_pso)
+> - [What can clear active_pso — the divergence explained](../../study/graphics/part6/part6_2_active_pso_rootsig.md#what-can-clear-active_pso)
 
 ### 문제
 

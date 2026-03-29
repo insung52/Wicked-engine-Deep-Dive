@@ -75,3 +75,71 @@ If `active_pso` is stale:
 - The GPU shader reads from the wrong memory → corrupted output or crash
 
 This is why `BindPipelineState` always updates `active_pso` after changing the GPU PSO, even for Dynamic PSOs where the pointer is the same but the hash differs.
+
+---
+
+## What Can Clear active_pso
+
+`active_pso` is set to `nullptr` by calls that switch the command list out of graphics mode:
+
+```cpp
+// BindComputeShader() — switches to compute mode
+commandlist.active_pso = nullptr;   // ← cleared
+commandlist.active_cs  = shader;
+```
+
+Critically, this does **not** clear `prev_pipeline_hash`. The hash remembers the last PSO that was bound to the GPU, but `active_pso` is now `nullptr`.
+
+This creates a divergence between the two variables:
+
+| Variable | Cleared by `BindComputeShader`? | Tracks |
+|----------|--------------------------------|--------|
+| `active_pso` | ✅ YES → becomes `nullptr` | CPU-side reference used by `flush()` |
+| `prev_pipeline_hash` | ❌ NO → keeps old value | Whether the GPU needs `SetPipelineState` |
+
+---
+
+## The Divergence Bug — Step by Step
+
+This divergence is the cause of the bug in `apply_pso_rootsig.md §1`:
+
+```
+1. BindComputeShader() called
+   → active_pso        = nullptr          ← cleared
+   → prev_pipeline_hash = (unchanged)     ← still holds old hash
+
+2. BindPipelineState(dynamic_pso) — first time
+   → hash is new → passes through
+   → SetPipelineState() called on GPU     ✓
+   → prev_pipeline_hash = hash(dynamic_pso, renderpass)
+   → active_pso        = dynamic_pso     ✓
+
+3. BindComputeShader() called again
+   → active_pso        = nullptr          ← cleared again
+   → prev_pipeline_hash = (unchanged)
+
+4. BindPipelineState(dynamic_pso) — second time, same PSO
+   → hash == prev_pipeline_hash → early return  ← correct for GPU
+   → active_pso stays nullptr                   ← BUG: flush() gets nullptr
+
+5. DrawInstanced() → flush() called
+   → to_internal(commandlist.active_pso)
+   → to_internal(nullptr)   ← null dereference → crash
+```
+
+**The fix**: update `active_pso` even on a cache hit, because `active_pso` serves `flush()` — not the GPU.
+
+```cpp
+// Before (buggy)
+if (commandlist.prev_pipeline_hash == pipeline_hash)
+{
+    return;
+}
+
+// After (fixed)
+if (commandlist.prev_pipeline_hash == pipeline_hash)
+{
+    commandlist.active_pso = pso;  // ← flush() needs this, regardless of GPU state
+    return;
+}
+```
