@@ -225,6 +225,11 @@ if (internal_state->resource != nullptr)
 
 ## 3. Root Descriptor SRV/UAV buffer offset
 
+> **Background concepts**
+> - [What is a buffer subresource and SingleDescriptor?](../../study/graphics/part6/part6_5_buffer_subresource.md)
+> - [Why Root Descriptor needs a manual byte offset (vs Descriptor Table)](../../study/graphics/part6/part6_3_descriptor_binder.md#root-descriptor-byte-offset--why-its-needed)
+> - [Root Descriptor offset warning (DX12 level)](../../study/graphics/part3/part3_3_root_signature.md#root-descriptor-byte-offset-warning)
+
 ### 문제
 
 버퍼의 특정 범위(subresource)를 Root Descriptor SRV/UAV로 바인딩할 때

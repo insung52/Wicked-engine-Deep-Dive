@@ -88,6 +88,8 @@ void DescriptorBinder::flush(bool graphics, CommandList cmd)
 
 Root Descriptor and Descriptor Table handle buffer offsets differently. See also: [Part 3-3 Root Signature — Byte Offset Warning](../part3/part3_3_root_signature.md).
 
+For what `subresource` and `SingleDescriptor` are, see [Part 6-5: Buffer Subresource and SingleDescriptor](part6_5_buffer_subresource.md).
+
 ```
 Buffer layout example (1 MB GPUBuffer):
 ┌────────────────────────────────────────────┐

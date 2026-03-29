@@ -12,6 +12,7 @@ Part 3 covered the concepts of PSO and Root Signature. This part covers **how a 
 | [part6_2_active_pso_rootsig.md](part6_2_active_pso_rootsig.md) | `active_pso` tracking, Root Sig Optimizer — how flush() finds the right slot |
 | [part6_3_descriptor_binder.md](part6_3_descriptor_binder.md) | DescriptorBinder record→flush pattern, Root Descriptor byte offset |
 | [part6_4_draw_flow.md](part6_4_draw_flow.md) | Full draw call flow CPU→GPU, VizMotive structure summary |
+| [part6_5_buffer_subresource.md](part6_5_buffer_subresource.md) | Buffer suballocation, subresource index, SingleDescriptor struct |
 
 ---
 
