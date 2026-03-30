@@ -1,5 +1,7 @@
 # VizMotive 적용: Bug Fixes & Stability
 
+**[Notebooklm pdf 문서 : bug fixes](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/pdf/bug_fixes.pdf)**
+
 ## 개요
 
 WickedEngine 분석에서 추출한 7개 버그 수정 커밋을 VizMotive에 적용한 기록.
