@@ -28,7 +28,7 @@ Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이�
 | Texture Operations | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_texture.md) | 5개 |
 | PSO & Root Signature | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_pso_rootsig.md) | 4개 |
 | Struct Optimization | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_struct_optimization.md) | 2개 |
-| Bug Fixes & Stability | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | (미적용) | 7개 |
+| Bug Fixes & Stability | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_bug_fixes.md) | 6개 |
 
 ---
 
