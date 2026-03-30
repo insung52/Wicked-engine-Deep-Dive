@@ -2,7 +2,7 @@
 
 > Index: [Part 3 Index](part3_index.md)
 > Previous: [Part 3-7](part3_7_engine_abstraction.md) — Engine Abstraction
-> Next: [Part 4](../part4/part4_resource_management.md) — Resource Management
+> Next: [Part 4](../part4/README.md) — Resource Management
 
 ---
 
