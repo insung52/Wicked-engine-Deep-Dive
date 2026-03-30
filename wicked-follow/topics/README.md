@@ -20,15 +20,15 @@ Wicked Engine DX12 커밋들을 주제별로 분류하여 전체 흐름을 이�
 
 ## 주제별 문서
 
-| 주제 | 분석 | VizMotive 적용 | 관련 커밋 수 |
-|------|------|----------------|-------------|
-| Frame Fence & Sync | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_frame_fence_sync.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_frame_fence_sync.md) | 4개 |
-| CopyAllocator | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_copy_allocator.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_copy_allocator.md) | 3개 |
-| Custom Allocator & shared_ptr | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_allocator_shared_ptr.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_allocator_shared_ptr.md) | 11개 |
-| Texture Operations | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_texture.md) | 5개 |
-| PSO & Root Signature | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_pso_rootsig.md) | 4개 |
-| Struct Optimization | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_struct_optimization.md) | 2개 |
-| Bug Fixes & Stability | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_bug_fixes.md) | 6개 |
+| 주제 | 분석 | VizMotive 적용 | 관련 커밋 수 | PR 적용 완료 |
+|------|------|----------------|-------------|-------------|
+| Frame Fence & Sync | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_frame_fence_sync.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_frame_fence_sync.md) | 4개 | ✅ merged |
+| CopyAllocator | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_copy_allocator.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_copy_allocator.md) | 3개 | ✅ merged |
+| Custom Allocator & shared_ptr | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_allocator_shared_ptr.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_allocator_shared_ptr.md) | 11개 | ✅ merged |
+| Texture Operations | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_texture.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_texture.md) | 5개 | — |
+| PSO & Root Signature | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_pso_rootsig.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_pso_rootsig.md) | 4개 | — |
+| Struct Optimization | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_struct_optimization.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_struct_optimization.md) | 2개 | — |
+| Bug Fixes & Stability | [topic](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/topic_bug_fixes.md) | [apply](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/wicked-follow/topics/apply_bug_fixes.md) | 6개 | — |
 
 ---
 
