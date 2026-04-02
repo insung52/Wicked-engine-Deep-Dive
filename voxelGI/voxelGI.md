@@ -185,7 +185,7 @@ clipmap.center = center;
     // wiRenderer.cpp:9680-9800
     void VXGI_Voxelize(const Visibility& vis, CommandList cmd)
     {
-    	// 9690: GPU 이벤트 시작
+    	// 9690: GPU 이벤트 시작 (디버깅용)
     	device->EventBegin("VXGI - Voxelize", cmd);
       // 9694-9720: ClipMap 범위 내 오브젝트들을 renderQueue에 수집
       const Scene::VXGI::ClipMap& clipmap = scene.vxgi.clipmaps[scene.vxgi.clipmap_to_update];
