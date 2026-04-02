@@ -62,7 +62,7 @@ wicked engine 은 deferred rendering 이용 → G-buffer 응용
 
 ## [0] 복셀 좌표계 구조
 
-1. 논리적 복셀 좌표
+### 1. 논리적 복셀 좌표
 - (0,0,0) ~ (resolution-1, resolution-1, resolution-1)
     - resolution : 64 기본값
     - 복셀 반지름 : 0.125 기본값, Editor 에서 조정 가능
@@ -81,21 +81,95 @@ wicked engine 은 deferred rendering 이용 → G-buffer 응용
     {
     ```
     
-    ![image.png](image1.png)
-    
-1. 물리적 복셀 좌표 (Physical Voxel Coordinate)
+### 2. 물리적 복셀 좌표 (Physical Voxel Coordinate)
     - 기준: 3D 텍스처의 실제 메모리 주소
-    - (0,0,0) ~ (resolution * 22, resolution * 6, resolution)
+    - (0,0,0) ~ (resolution * 22, resolution * 6, resolution * 13)
     - 단위: 텍셀 인덱스
-    - 예시:
-    논리적 (10, 20, 30) → 물리적 (266, 148, 390)
-    // X: 10 + 2**128 = 266 (방향 오프셋)
-    // Y: 20 + 1**128 = 148 (clipmap 레벨 오프셋)
-    // Z: 30 * 13 = 390 (채널 오프셋)
+
+    **X축 — face 아틀라스 (22 슬라이스)**:
+    ```
+    X축 전체 (1408px = 22 슬라이스 × 64px):
+    │ 슬라이스 0  │ 슬라이스 1  │ 슬라이스 2  │ ... │ 슬라이스 21  │
+    │   0~63     │   64~127   │  128~191   │     │  1344~1407  │
+    │  face 0    │  face 1    │  face 2    │     │  face 21    │
+    │(+X 이방성)  │(-X 이방성)  │(+Y 이방성)  │     │(확산 콘 15) │
+
+    각 슬라이스는 복셀 그리드 1개 전체(0~63)를 담는다.
+    → physical_X = logical_X + face_index * resolution
+    ```
+
+    셰이더 코드 (meshPS_voxelizer.hlsl):
+    ```hlsl
+    uint3 writecoord = floor(uvw * resolution);  // logical coord (0~63)
+    float3 face_offsets = float3(
+        aniso_direction.x > 0 ? 0 : 1,  // face 0 or 1
+        aniso_direction.y > 0 ? 2 : 3,
+        aniso_direction.z > 0 ? 4 : 5
+    ) * resolution;                       // face_index * 64
+    InterlockedAdd(output_atomic[writecoord + uint3(face_offsets.x, 0, CHANNEL)], ...);
+    // physical_X = writecoord.x + face_offsets.x = logical_X + face_index * resolution
+    ```
+
+    **Y축 — clipmap 레벨 아틀라스 (6 레벨)**:
+    ```
+    Y축 전체 (384px = 6 레벨 × 64px):
+    │  레벨 0  │  레벨 1  │  레벨 2  │ ... │  레벨 5  │
+    │   0~63  │  64~127  │ 128~191  │     │ 320~383  │
+
+    각 레벨은 더 넓은 세계 범위를 커버 (레벨마다 voxelSize 2배).
+    → physical_Y = logical_Y + clipmap_index * resolution
+    ```
+
+    셰이더 코드 (voxelGS.hlsl):
+    ```hlsl
+    uint3 pixel = coord;                                      // logical coord (0~63)
+    pixel.y += clipmap_index * GetFrame().vxgi.resolution;   // Y clipmap 오프셋
+    // physical_Y = logical_Y + clipmap_index * resolution
+    ```
+
+    **Z축 — 채널 인터리브 (13개 데이터 채널, RGBA가 아님)**:
+    ```
+    Z축 한 복셀의 레이아웃 (logical_Z=n → physical_Z = n*13 ~ n*13+12):
+    │ n*13+0  │ BASECOLOR_R    │ 베이스 컬러 R
+    │ n*13+1  │ BASECOLOR_G    │ 베이스 컬러 G
+    │ n*13+2  │ BASECOLOR_B    │ 베이스 컬러 B
+    │ n*13+3  │ BASECOLOR_A    │ 베이스 컬러 A (투명도)
+    │ n*13+4  │ EMISSIVE_R     │ 방출광 R
+    │ n*13+5  │ EMISSIVE_G     │ 방출광 G
+    │ n*13+6  │ EMISSIVE_B     │ 방출광 B
+    │ n*13+7  │ DIRECTLIGHT_R  │ 직접광 R
+    │ n*13+8  │ DIRECTLIGHT_G  │ 직접광 G
+    │ n*13+9  │ DIRECTLIGHT_B  │ 직접광 B
+    │ n*13+10 │ NORMAL_R       │ 법선 (oct-encoded) R
+    │ n*13+11 │ NORMAL_G       │ 법선 (oct-encoded) G
+    │ n*13+12 │ FRAGMENT_COUNTER│ 삼각형 수 (평균 계산용 분모)
+
+    왜 RGBA 텍스처가 아닌가?
+    → InterlockedAdd는 uint 단일 채널에만 동작.
+      여러 삼각형이 같은 복셀에 동시에 쓰므로 원자적 연산 필수.
+      → 각 채널을 별도 Z 슬라이스에 분리 (de-interleaved).
+    → physical_Z = logical_Z * VOXELIZATION_CHANNEL_COUNT + channel_index
+    ```
+
+    셰이더 코드 (meshPS_voxelizer.hlsl):
+    ```hlsl
+    writecoord.z *= VOXELIZATION_CHANNEL_COUNT;  // = logical_Z * 13
+    InterlockedAdd(output_atomic[writecoord + uint3(face_offset, 0, VOXELIZATION_CHANNEL_BASECOLOR_R)], ...);
+    InterlockedAdd(output_atomic[writecoord + uint3(face_offset, 0, VOXELIZATION_CHANNEL_BASECOLOR_G)], ...);
+    // ... 13개 채널 각각 별도 InterlockedAdd
+    ```
+
+    - 예시: 논리적 (10, 20, 30), face_x=2, clipmap_level=1, channel=BASECOLOR_R(0)
+    ```
+    // X: 10 + 2 * 64 = 138   (슬라이스 2 안의 위치 10)
+    // Y: 20 + 1 * 64 = 84    (clipmap 레벨 1 오프셋)
+    // Z: 30 * 13 + 0 = 390   (BASECOLOR_R 채널)
+    논리적 (10, 20, 30) → 물리적 (138, 84, 390)
+
+    // 전체 텍스처 크기: (22*64) × (6*64) × (13*64) = 1408 × 384 × 832
+    ```
     
-    ![image.png](image2.png)
-    
-2. ClipMap 좌표계
+### 3. ClipMap 좌표계
     - 기준: 정규화된 [0,1] 범위
     - 중심: ClipMap의 center (월드 좌표 기준 카메라 위치)
     - 범위: [0,1] × [0,1] × [0,1]
