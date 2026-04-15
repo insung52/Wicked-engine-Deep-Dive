@@ -1,6 +1,6 @@
 # VizMotive Engine VXGI 구현 분석
 
-> VXGI 이론 및 Wicked Engine 원본 구현 분석: [voxelGI.md](voxelGI.md)
+> VXGI 이론 및 Wicked Engine 원본 구현 분석: [voxelGI.md](https://github.com/insung52/Wicked-engine-Deep-Dive/blob/main/voxelGI/voxelGI.md)
 
 커밋 `49e845e` ("add vxgi") 기준으로 분석한 VizMotive Engine의 VXGI 구현입니다.
 
