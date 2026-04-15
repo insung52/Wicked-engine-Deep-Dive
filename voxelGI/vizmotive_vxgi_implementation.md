@@ -4,6 +4,26 @@
 
 커밋 `49e845e` ("add vxgi") 기준으로 분석한 VizMotive Engine의 VXGI 구현입니다.
 
+### 원본 scene
+
+![alt text](origin.png)
+
+### voxelGI 활성화
+
+![alt text](vxgi.png)
+
+### voxelGI + Reflections 활성화
+
+![alt text](vxgi_reflection.png)
+
+### voxelGI debug 활성화
+
+![alt text](vxgi_debug.png)
+
+### DDGI 활성화 (비교용)
+
+![alt text](ddgi.png)
+
 ---
 
 ## 1. 개요
