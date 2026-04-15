@@ -1,5 +1,3 @@
-![image.png](image10.png)
-
 # voxel GI
 
 # 0. 이론

@@ -1,5 +1,7 @@
 # VizMotive Engine VXGI 구현 분석
 
+> VXGI 이론 및 Wicked Engine 원본 구현 분석: [voxelGI.md](voxelGI.md)
+
 커밋 `49e845e` ("add vxgi") 기준으로 분석한 VizMotive Engine의 VXGI 구현입니다.
 
 ---
@@ -150,30 +152,49 @@ vxgi.clipmap_to_update = (vxgi.clipmap_to_update + 1) % VXGI_CLIPMAP_COUNT;
 매 프레임 아래 순서로 실행됩니다:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ A. Clear Atomic                                         │
-│    texture_atomic → UAV → ClearUAV(0)                   │
-├─────────────────────────────────────────────────────────┤
-│ B. offsetprevCS  (그리드 스크롤 시프트)                    │
-│    입력: t0 = texture_radiance    (SR)                   │
-│    출력: u0 = texture_radiance_prev (UAV)                │
-├─────────────────────────────────────────────────────────┤
-│ C. Voxelize  (래스터라이즈)                               │
-│    DrawScene(RENDERPASS_VOXELIZE)                       │
-│    출력: u0 = texture_atomic  (UAV, 원자 쓰기)            │
-├─────────────────────────────────────────────────────────┤
-│ D. temporalCS  (Temporal Blend)                         │
-│    입력: t0 = texture_radiance_prev (SR)                 │
-│            t1 = texture_atomic      (SR)                │
-│    출력: u0 = texture_radiance      (UAV)                │
-├─────────────────────────────────────────────────────────┤
-│ E. SDF JFA                                              │
-│    Init 패스: texture_radiance alpha → texture_sdf       │
-│    JFA 패스: step = res/2 → ... → 1  (ping-pong)         │
-│    출력: texture_sdf (SR)                                │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ A. Clear Atomic                                                             │
+│    texture_atomic → UAV → ClearUAV(0)                                       │
+│                                                                             │
+│    이번 프레임 복셀화 결과를 새로 쌓기 위해 atomic 버퍼를 전부 0으로 초기화.         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ B. offsetprevCS  (그리드 스크롤 시프트)                                        │
+│    입력: t0 = texture_radiance    (SR)                                       │
+│    출력: u0 = texture_radiance_prev (UAV)                                    │
+│                                                                             │
+│    카메라가 이동하면 복셀 그리드도 스냅 이동한다. 이전 프레임 radiance를            │
+│    offsetfromPrevFrame만큼 좌표 시프트해서 prev 버퍼에 복사.                    │
+│    그리드 밖으로 밀려난 복셀은 0으로 초기화해 ghost를 방지.                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ C. Voxelize  (래스터라이즈)                                                   │
+│    DrawScene(RENDERPASS_VOXELIZE)                                           │
+│    출력: u0 = texture_atomic  (UAV, 원자 쓰기)                                │
+│                                                                             │
+│    씬 메시를 복셀 해상도로 래스터화. Pixel Shader에서 각 복셀에 해당하는            │
+│    basecolor, emissive, direct light 값을 InterlockedAdd로 원자적 누적.       │
+│    GS가 XY/YZ/ZX 3축 중 투영 면적이 최대인 축으로 방향을 선택.                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ D. temporalCS  (Temporal Blend)                                             │
+│    입력: t0 = texture_radiance_prev (SR)                                     │
+│            t1 = texture_atomic      (SR)                                    │
+│    출력: u0 = texture_radiance      (UAV)                                    │
+│                                                                             │
+│    atomic 버퍼의 누적값을 fragment count로 나눠 평균 radiance를 계산.            │
+│    geometry가 있으면 prev와 lerp(BLEND_SPEED=0.05)로 temporal 안정화.          │
+│    geometry가 없으면 0으로 즉시 초기화 (메시 이동 시 ghost 방지).                 │
+│    anisotropic 6면 외에 diffuse cone 슬라이스 16개도 함께 프리컴퓨팅.            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ E. SDF JFA                                                                  │
+│    Init 패스: texture_radiance alpha → texture_sdf                           │
+│    JFA 패스: step = res/2 → ... → 1  (ping-pong)                             │
+│    출력: texture_sdf (SR)                                                    │
+│                                                                             │
+│    specular cone tracing의 empty space skipping용 SDF를 생성.                 │
+│    radiance alpha > 0.1인 복셀을 filled(=0), 나머지를 empty(=res)로 초기화한    │
+│    뒤, JFA로 각 복셀에서 가장 가까운 geometry까지의 거리를 전파.                  │
+└─────────────────────────────────────────────────────────────────────────────┘
 SR (Shader Resource View, 읽기전용)
-UAV (Unordered Access View, 일기 + 쓰기)
+UAV (Unordered Access View, 읽기 + 쓰기)
 ```
 
 이후 `Renderer.cpp`에서:
@@ -181,28 +202,20 @@ UAV (Unordered Access View, 일기 + 쓰기)
 F. vxgi_resolve_diffuseCS
    입력: t0 = depthBuffer_Copy,  t1 = texture_normals
    출력: rtVXGI_diffuse (UAV) — 스크린 공간 GI 결과
+
+   스크린 각 픽셀의 depth/normal로 월드 좌표를 복원한 뒤,
+   해당 위치에서 ConeTraceDiffuse를 호출해 2D 텍스처에 GI 결과를 기록.
 ```
 
 ---
 
 ## 5. 각 셰이더 상세 분석
 
-### 5.1 `meshPS_voxelizer.hlsl` — 복셀화 픽셀 셰이더
-
-- Geometry Shader가 3축 중 가장 면적이 큰 축으로 투영 방향 선택
-- ForwardLighting으로 direct light 계산 후 `VoxelAtomicAverage`로 원자 쓰기:
-
-```hlsl
-// 채널별로 값 누적, FRAGMENT_COUNTER에 카운트 누적
-InterlockedAdd(output_atomic[ac + BASECOLOR_R], PackVoxelChannel(color.r * frag));
-InterlockedAdd(output_atomic[ac + FRAGMENT_COUNTER], 1);
-```
-
-- `DISABLE_VOXELGI` 정의로 voxelizer 내부에서 재귀 VoxelGI 호출 차단
+파이프라인 실행 순서(B→C→D→E→F)에 맞춰 정리합니다.
 
 ---
 
-### 5.2 `vxgi_offsetprevCS.hlsl` — 그리드 시프트
+### 5.1 `vxgi_offsetprevCS.hlsl` — 그리드 시프트 (B)
 
 ```hlsl
 int3 prev_dtid = (int3)DTid + push.offsetfromPrevFrame;
@@ -222,7 +235,22 @@ for (uint i = 0; i < 6 + DIFFUSE_CONE_COUNT; ++i) {
 
 ---
 
-### 5.3 `vxgi_temporalCS.hlsl` — Temporal Blend
+### 5.2 `meshPS_voxelizer.hlsl` — 복셀화 픽셀 셰이더 (C)
+
+- Geometry Shader가 3축 중 가장 면적이 큰 축으로 투영 방향 선택
+- ForwardLighting으로 direct light 계산 후 `VoxelAtomicAverage`로 원자 쓰기:
+
+```hlsl
+// 채널별로 값 누적, FRAGMENT_COUNTER에 카운트 누적
+InterlockedAdd(output_atomic[ac + BASECOLOR_R], PackVoxelChannel(color.r * frag));
+InterlockedAdd(output_atomic[ac + FRAGMENT_COUNTER], 1);
+```
+
+- `DISABLE_VOXELGI` 정의로 voxelizer 내부에서 재귀 VoxelGI 호출 차단
+
+---
+
+### 5.3 `vxgi_temporalCS.hlsl` — Temporal Blend (D)
 
 **1단계: atomic 데이터 언패킹 (면별 평균)**
 
@@ -263,7 +291,53 @@ for (uint ci = 0; ci < DIFFUSE_CONE_COUNT; ci++) {
 
 ---
 
-### 5.4 `voxelConeTracingHF.hlsli` — Cone Tracing 핵심
+### 5.4 `vxgi_sdf_jumpfloodCS.hlsl` — SDF 생성 (E)
+
+**Init 패스** (`isInit = true`):
+```hlsl
+half4 rad = input_radiance[rad_coord];
+output_sdf[sdf_coord] = rad.a > 0.1h ? 0.0f : (float)res;
+// filled voxel = 0, empty = res (최대 거리)
+```
+
+**JFA 패스** (`step = res/2 → 1`):
+```hlsl
+float minDist = input_sdf[sdf_coord];
+for (dz=-1..1) for (dy=-1..1) for (dx=-1..1) {
+    int3 neighbor = (int3)DTid + int3(dx,dy,dz) * step;
+    float d = input_sdf[neighbor] + length(float3(dx,dy,dz) * step);
+    if (d < minDist) minDist = d;
+}
+// 복셀 단위 → 월드 공간 변환
+output_sdf[sdf_coord] = minDist * clipmap.voxelSize * 2.0f;
+```
+
+ping-pong: `texture_sdf` ↔ `texture_sdf_temp` 스왑.
+
+---
+
+### 5.5 `vxgi_resolve_diffuseCS.hlsl` — 스크린 GI 계산 (F)
+
+스크린 각 픽셀에서 depth/normal을 읽어 월드 좌표를 복원한 뒤 `ConeTraceDiffuse`를 호출합니다:
+
+```hlsl
+float2 uv = ((float2)DTid.xy + 0.5f) * GetCamera().internal_resolution_rcp;
+float4 clipPos = float4(uv * float2(2, -2) + float2(-1, 1), depth, 1);
+float4 worldPos = mul(GetCamera().inverse_view_projection, clipPos);
+float3 P = worldPos.xyz / worldPos.w;
+
+float3 N = normalize((float3)decode_oct((half2)input_normal[DTid.xy].xy));
+
+Texture3D<half4> voxels = bindless_textures3D_half4[descriptor_index(GetFrame().vxgi.texture_radiance)];
+float4 result = ConeTraceDiffuse(voxels, P, N);
+output[DTid.xy] = (half4)result;
+```
+
+---
+
+### 5.6 `voxelConeTracingHF.hlsli` — Cone Tracing 핵심 (헬퍼)
+
+F 단계에서 호출되며, 조각 셰이더의 `VoxelGI()`에서도 직접 사용합니다.
 
 #### Self-occlusion 방지 (startVoxelSize)
 
@@ -340,31 +414,6 @@ step_dist = diameter * stepSizeCurrent;
 
 ---
 
-### 5.5 `vxgi_sdf_jumpfloodCS.hlsl` — SDF 생성
-
-**Init 패스** (`isInit = true`):
-```hlsl
-half4 rad = input_radiance[rad_coord];
-output_sdf[sdf_coord] = rad.a > 0.1h ? 0.0f : (float)res;
-// filled voxel = 0, empty = res (최대 거리)
-```
-
-**JFA 패스** (`step = res/2 → 1`):
-```hlsl
-float minDist = input_sdf[sdf_coord];
-for (dz=-1..1) for (dy=-1..1) for (dx=-1..1) {
-    int3 neighbor = (int3)DTid + int3(dx,dy,dz) * step;
-    float d = input_sdf[neighbor] + length(float3(dx,dy,dz) * step);
-    if (d < minDist) minDist = d;
-}
-// 복셀 단위 → 월드 공간 변환
-output_sdf[sdf_coord] = minDist * clipmap.voxelSize * 2.0f;
-```
-
-ping-pong: `texture_sdf` ↔ `texture_sdf_temp` 스왑.
-
----
-
 ## 6. GI 적용 (`lightingHF.hlsli` / `shadingHF.hlsli`)
 
 ```hlsl
@@ -424,7 +473,6 @@ lighting.indirect.specular = mad(lighting.indirect.specular, 1 - traceSpec.a, tr
 
 | 이슈 | 원인 | 상태 |
 |------|------|------|
-| Clipmap 0/1 경계 밝기 불연속 | Clipmap 레벨별 self-occlusion 정도 차이 | startVoxelSize로 일부 완화, 완전 해결 미완 |
+| Clipmap 경계 밝기 불연속 | Clipmap 레벨별 self-occlusion 정도 차이 | startVoxelSize로 일부 완화, 완전 해결 미완, wicked engine 에서도 동일한 현상 존재 |
 | 구 메시 복셀 커버리지 불완전 | Conservative Rasterization 미사용 | 근본 한계, 필요 시 `VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED` 활성화 |
-| VRS와 충돌 | D3D12 스펙 #1231 | VRS 없을 때만 forced_sample_count=8 적용 |
 | 빠른 씬 변화에 지연 | 6프레임 후 전체 클립맵 갱신 | Round-robin 구조의 근본 특성 |
