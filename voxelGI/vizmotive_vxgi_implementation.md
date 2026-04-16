@@ -493,6 +493,38 @@ lighting.indirect.specular = mad(lighting.indirect.specular, 1 - traceSpec.a, tr
 
 | 이슈 | 원인 | 상태 |
 |------|------|------|
-| Clipmap 경계 밝기 불연속 | Clipmap 레벨별 self-occlusion 정도 차이 | startVoxelSize로 일부 완화, 완전 해결 미완, wicked engine 에서도 동일한 현상 존재 |
-| 구 메시 복셀 커버리지 불완전 | Conservative Rasterization 미사용 | 근본 한계, 필요 시 `VOXELIZATION_CONSERVATIVE_RASTERIZATION_ENABLED` 활성화 |
+| Clipmap 경계 밝기 불연속 | Clipmap 레벨별 self-occlusion 정도 차이 | startVoxelSize로 일부 완화, 완전 해결 미완, Wicked Engine에서도 동일한 현상 존재 |
+| 구 메시 복셀 커버리지 미세 불완전 | Conservative Rasterization 미사용, 곡면 삼각형의 투영 면적 한계 | **개선 완료** (아래 참고). 직육면체 등 단순 메시는 완벽 커버. 구 등 복잡한 메시는 미세한 틈 잔존 (Wicked Engine과 동일 수준) |
 | 빠른 씬 변화에 지연 | 6프레임 후 전체 클립맵 갱신 | Round-robin 구조의 근본 특성 |
+
+### 복셀 커버리지 개선 상세
+
+**원인 분석:**  
+VizMotive는 GPU가 VRS(Variable Rate Shading)를 지원하면 `forced_sample_count = 8`을 적용하지 않았음.
+`forced_sample_count = 8`이 없으면 기본 1x 샘플로만 래스터화 → 경사진 삼각형에서 복셀 경계 픽셀 생성 누락 → 커버리지 저하.
+
+Wicked Engine은 VRS 지원 여부와 무관하게 무조건 `forced_sample_count = 8`을 적용하고 있었음.
+
+**수정 내용 (`ShaderEngine.cpp`):**
+```cpp
+// 수정 전: VRS 지원 GPU에서는 미적용
+if (!device->CheckCapability(GraphicsDeviceCapability::VARIABLE_RATE_SHADING))
+    rs.forced_sample_count = 8;
+
+// 수정 후: Wicked Engine과 동일하게 무조건 적용
+// (voxelizer pass는 VRS를 바인딩하지 않으므로 충돌 없음)
+rs.forced_sample_count = 8;
+```
+
+**부수 수정 (`GraphicsDevice_DX12.cpp`):**  
+`forced_sample_count > 1` 사용 시 D3D12는 effective shading rate가 반드시 1x1이어야 함.
+기존 `BindShadingRate(RATE_1X1)` 구현이 combiner를 `COMBINER_MAX`로 설정해 per-primitive/screen-space VRS가 override할 수 있었음.
+`RATE_1X1` 호출 시 combiner를 `PASSTHROUGH`로 변경하여 1x1을 강제:
+
+```cpp
+const bool is_1x1 = (rate == ShadingRate::RATE_1X1);
+D3D12_SHADING_RATE_COMBINER combiners[] = {
+    is_1x1 ? D3D12_SHADING_RATE_COMBINER_PASSTHROUGH : D3D12_SHADING_RATE_COMBINER_MAX,
+    is_1x1 ? D3D12_SHADING_RATE_COMBINER_PASSTHROUGH : D3D12_SHADING_RATE_COMBINER_MAX,
+};
+```
