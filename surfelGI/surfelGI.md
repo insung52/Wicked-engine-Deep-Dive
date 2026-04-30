@@ -10,7 +10,7 @@ Wicked Engine 9.2 기준으로 분석한 Surfel GI 구현입니다.
 
 ### Surfel이란?
 
-**Surfel(Surface Element)**은 3D 씬의 표면을 나타내는 **구체 형태의 작은 원반 요소**다.
+**Surfel(Surface Element)** 은 3D 씬의 표면을 나타내는 **구체 형태의 작은 원반 요소**다.
 
 - 각 surfel은 **위치(position)**, **법선(normal)**, **반경(radius)** 을 가짐
 - 표면 위에 동적으로 배치되어 그 지점의 GI(간접광) 정보를 저장
@@ -23,7 +23,7 @@ Wicked Engine 9.2 기준으로 분석한 Surfel GI 구현입니다.
 | GI 저장 단위 | 3D 격자 복셀 | 표면에 배치된 구체(surfel) |
 | 씬 표현 | 공간 전체를 격자로 분할 | 실제 표면 위에만 존재 |
 | 간접광 계산 | Cone tracing (복셀 샘플링) | Ray tracing (TLAS 기반) |
-| 빛 정보 형식 | Anisotropic radiance (6면) | SH(Spherical Harmonics) L1 |
+| 빛 정보 형식 | Anisotropic radiance (6면) | SH(Spherical Harmonics) L1 | 반구 형태에는 SH 에서 음수 로브 (light leak) 현상이 발생할 수 있음, H-basis 로 더 정확한 저장 가능(메모리는 동일)
 | 적응성 | 고정 해상도 클립맵 | 커버리지에 따라 동적 스폰/소멸 |
 | 공간 범위 | 클립맵 반경 내 | 무한 (hashing 기반 grid) |
 
