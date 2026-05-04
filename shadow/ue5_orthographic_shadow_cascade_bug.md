@@ -171,6 +171,7 @@ d = (1/√2)×sin(θ) + (1/√2)×(-cos(θ)) = (sin(θ) - cos(θ)) / √2
 
 빛 각도가 45°를 넘는 순간 ShadowBoundsAccurate를 구성하는 plane 집합이 바뀌고,  
 이에 따라 convex volume의 형태가 바뀐다.  
+
 H < W/2인 상태에서 fake frustum이 이미 실제 뷰보다 좁은데,  
 빛 45° 이상에서 ShadowBoundsAccurate 형태까지 바뀌면서  
 실제 ortho 뷰 경계의 caster들이 culling volume 밖으로 벗어나기 시작한다.
