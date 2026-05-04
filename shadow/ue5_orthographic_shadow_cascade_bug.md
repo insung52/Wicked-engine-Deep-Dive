@@ -1,5 +1,7 @@
 # UE5 Orthographic SceneCapture2D — Shadow Cascade 버그 분석
 
+![alt text](image-4.png)
+
 ## 현상
 
 SceneCapture2D를 Orthographic 모드로 위에서 아래로 찍을 때:
