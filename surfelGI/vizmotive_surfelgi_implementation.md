@@ -187,9 +187,9 @@ sample14 의 `light_axis` 변경:
 
 ### 4.2. 얇은 mesh 의 indirect leak
 
-![alt text](image-3.png)
+![alt text](image-6.png)
 
-![alt text](image-4.png)
+![alt text](image-7.png)
 
 `SURFEL_MAX_RADIUS = 2m` 보다 얇은 mesh 에서 cell 안 surfel cache 가 mesh boundary 무시 → 빛 새는 현상.
 
@@ -201,7 +201,7 @@ sample14 의 `light_axis` 변경:
 
 ![alt text](image-5.png)
 
-- surfel 반경만큼 주변 표면의 surfel 들이 영향을 받게된다.
+- surfel 반경만큼 인접 mesh 표면의 surfel 들이 영향을 받게된다.
 
 Wicked 동등 환경에서 검증 시 동일 발생 (사용자 직접 확인).
 
