@@ -205,6 +205,8 @@ sample14 의 `light_axis` 변경:
 
 Wicked 동등 환경에서 검증 시 동일 발생 (사용자 직접 확인).
 
+![alt text](image-8.png)
+
 향후 개선 가능성 (Wicked 도 미해결):
 - visibility-aware multi-bounce (cell 안 surfel 끼리 visibility ray cast)
 - adaptive cell radius (mesh thickness 기반)
