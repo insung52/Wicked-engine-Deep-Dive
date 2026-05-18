@@ -45,6 +45,18 @@
   - **동적 오브젝트가 움직여도 surfel이 따라감**
 - 이미지 자리: Surfel 디버그 뷰 (표면 위 점들 시각화)
 
+
+
+rendering primitives 의 surfel
+- 대충 버텍스 삼각형, 포인트 클라우드, 서펠 등등 사진 나열
+
+surfelGI 의 surfel
+- (surfelGI 의 surfel 역할 간단한 문장 ex. 표면의 빛 정보를 캐시)
+
+원래 surfel 은 삼각형 메시, point cloud 등 과 같은 rendering primitives 이지만,
+surfelGI 에서의 surfel은 표면의 라이팅 정보를 저장하는 단위로 사용한다.
+왜냐하면 (surfel 의 장점을 간단히 설명)
+
 ---
 
 ## Slide 4 — DDGI와의 공통점
@@ -62,8 +74,6 @@
 공통점 목록:
 - **L1 SH (12 floats)** 로 radiance 저장 및 조회
 - **텍셀 단위 temporal blending** (MultiscaleMeanEstimator)
-- **Inconsistency 기반 ray budget 배분** — 변화가 큰 영역에 ray를 더 많이
-- **Visibility test** (Moment texture, Chebyshev 부등식)
 - **Shadow ray**로 직접광 계산 (NEE)
 - **이전 프레임 데이터 재귀 조회** → 무한 반사
 
@@ -247,3 +257,12 @@ SURFEL_RAY_BOOST_MAX = 64 ray / surfel (최대)
 - SurfelGI 핵심: **DDGI와 같은 L1 SH 방식 + 표면 위 동적 배치**
 - 세 기법은 각각의 장단점이 있으며 씬 특성에 따라 선택
 - GI 시리즈 완료: DDGI → SurfelGI → VoxelGI
+
+표지
+동작화면
+Surfel 개념 설명
+작동 과정
+DDGI 와 공통점 (SH 로 저장, specular 안됨)
+Ddgi 와 차이점 (필요한 곳에만 surfel 생성됨)
+장점
+한계
