@@ -25,6 +25,8 @@
 
 > 핵심 차이: **어디에** 캐시를 배치하는가
 
+![alt text](image.png)
+
 ---
 
 ## Slide 3 — Surfel이란?
