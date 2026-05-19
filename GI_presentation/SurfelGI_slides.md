@@ -27,6 +27,8 @@
 
 ![alt text](image.png)
 
+![alt text](image-1.png)
+
 ---
 
 ## Slide 3 — Surfel이란?
