@@ -55,7 +55,14 @@ button.active { background: #0a2a44; border-color: #00aaff; color: #00d4ff; }
       <button id="btn-step">다음 Surfel 계산</button>
       <button id="btn-frame">현재 프레임 완료</button>
       <button id="btn-render">GI 렌더링 OFF</button>
+      <button id="btn-rays">Ray 수: 4</button>
       <button id="btn-reset">↺ 초기화</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;justify-content:center;font-size:0.77em;color:#667;">
+      <span>애니메이션 속도</span>
+      <input type="range" id="speed-slider" min="1" max="8" step="1" value="3"
+        style="width:130px;accent-color:#00d4ff;cursor:pointer;">
+      <span id="speed-label" style="color:#00d4ff;min-width:28px;font-weight:bold;">1×</span>
     </div>
   </div>
   <div id="sidebar">
@@ -96,9 +103,17 @@ button.active { background: #0a2a44; border-color: #00aaff; color: #00d4ff; }
 'use strict';
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
+// HiDPI: scale canvas buffer by devicePixelRatio
+const LOGICAL_W = 750, LOGICAL_H = 480;
+const DPR = Math.min(window.devicePixelRatio || 1, 3);
+canvas.width  = LOGICAL_W * DPR;
+canvas.height = LOGICAL_H * DPR;
+canvas.style.width  = LOGICAL_W + 'px';
+canvas.style.height = LOGICAL_H + 'px';
+ctx.scale(DPR, DPR);
+const W = LOGICAL_W, H = LOGICAL_H;
 
-const SC = 27;         // px per world unit
+const SC = 27;         // px per world unit (logical)
 const SR = 2.5;        // surfel influence radius (world units)
 const SR_PX = SR * SC;
 
@@ -130,6 +145,17 @@ function rgb2css(r,g,b,a=1) {
   return a<1 ? `rgba(${ri},${gi},${bi},${a.toFixed(2)})` : `rgb(${ri},${gi},${bi})`;
 }
 function magRGB(c) { return Math.sqrt(c[0]**2+c[1]**2+c[2]**2); }
+
+// ── pseudo-random: per-frame per-surfel per-ray seed ──
+function rand01(seed) {
+  let h = (seed ^ 0xdeadbeef) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+let RAYS_PER_SURFEL = 4;
+const RAY_OPTIONS = [1, 2, 4, 8];
 
 // ── ray tracing ───────────────────────────────────────
 function segHit(ox,oy,dx,dy, x1,y1,x2,y2) {
@@ -163,25 +189,29 @@ function lightVisible(px,py) {
 function mkS(wx,wy,nx,ny,wi) { return {wx,wy,nx,ny,wi, sh:[0,0,0], life:0}; }
 
 let surfels = [
-  // top wall n=(0,+1)
-  mkS(3, 1,  0, 1,  0), mkS(7,  1,  0, 1,  0), mkS(11,1,  0, 1,  0),
-  mkS(15,1,  0, 1,  0), mkS(19,1,  0, 1,  0), mkS(23,1,  0, 1,  0),
-  // left wall n=(+1,0)
-  mkS(1, 4,  1, 0,  1), mkS(1, 8,  1, 0,  1), mkS(1, 13, 1, 0,  1),
-  // right wall n=(-1,0)
-  mkS(27,4, -1, 0,  2), mkS(27,9, -1, 0,  2), mkS(27,13,-1, 0,  2),
-  // bottom wall n=(0,-1)
-  mkS(6, 17, 0,-1,  3), mkS(14,17, 0,-1,  3), mkS(22,17, 0,-1,  3),
-  // box top n=(0,-1)  — faces toward light above
-  mkS(11,6,  0,-1,  4), mkS(14,6,  0,-1,  4),
-  // box left n=(-1,0) — in shadow, good for indirect demo
-  mkS(9, 8,  -1,0,  5),
-  // box right n=(+1,0)
-  mkS(16,8,   1,0,  6),
-  // box bottom n=(0,+1)
-  mkS(12,11, 0, 1,  7),
-  // purple box
-  mkS(5, 9,  0,-1,  8), mkS(3, 12,-1, 0,  9), mkS(7, 12, 1, 0, 10),
+  // top wall n=(0,+1)  — 9개
+  mkS(2, 1, 0,1,0), mkS(5, 1,0,1,0), mkS(8, 1,0,1,0), mkS(11,1,0,1,0),
+  mkS(14,1, 0,1,0), mkS(17,1,0,1,0), mkS(20,1,0,1,0), mkS(23,1,0,1,0), mkS(26,1,0,1,0),
+  // left wall n=(+1,0)  — 5개
+  mkS(1,3,  1,0,1), mkS(1,6,  1,0,1), mkS(1,9,  1,0,1), mkS(1,12, 1,0,1), mkS(1,15, 1,0,1),
+  // right wall n=(-1,0) — 5개
+  mkS(27,3,-1,0,2), mkS(27,6,-1,0,2), mkS(27,9,-1,0,2), mkS(27,12,-1,0,2), mkS(27,15,-1,0,2),
+  // bottom wall n=(0,-1) — 5개
+  mkS(4,17,0,-1,3), mkS(8,17,0,-1,3), mkS(13,17,0,-1,3), mkS(18,17,0,-1,3), mkS(23,17,0,-1,3),
+  // box top n=(0,-1) — 3개
+  mkS(10.5,6,0,-1,4), mkS(12.5,6,0,-1,4), mkS(14.5,6,0,-1,4),
+  // box left n=(-1,0) — 2개
+  mkS(9,7.5,-1,0,5), mkS(9,9.5,-1,0,5),
+  // box right n=(+1,0) — 2개
+  mkS(16,7.5,1,0,6), mkS(16,9.5,1,0,6),
+  // box bottom n=(0,+1) — 2개
+  mkS(11,11,0,1,7), mkS(14,11,0,1,7),
+  // purple box top n=(0,-1) — 2개
+  mkS(4,9,0,-1,8), mkS(6,9,0,-1,8),
+  // purple box left n=(-1,0) — 2개
+  mkS(3,10.5,-1,0,9), mkS(3,13,-1,0,9),
+  // purple box right n=(+1,0) — 2개
+  mkS(7,10.5,1,0,10), mkS(7,13,1,0,10),
 ];
 
 const SURFEL_COUNT = surfels.length;
@@ -199,70 +229,82 @@ let renderMode = false;
 let autoRunning = false;
 let autoTmr = null;
 
-// ── pre-compute (no side effects) ────────────────────
+// ── pre-compute: N rays per surfel, running average blend ─
 function precompute(idx) {
   const s = surfels[idx];
-  // deterministic ray direction: cycle through 7 angles per frame
-  const seed = frame;
-  const N = 7;
-  const t = (seed % N) / N;
   const baseAng = Math.atan2(s.ny, s.nx);
-  const offset  = (t - 0.5) * Math.PI * 0.88;
-  const dx = Math.cos(baseAng + offset);
-  const dy = Math.sin(baseAng + offset);
+  const N = RAYS_PER_SURFEL;
 
-  const hit = traceRay(s.wx, s.wy, dx, dy);
+  let sumDir=[0,0,0], sumInd=[0,0,0];
+  let allRays   = [];   // all ray data for animation
+  for (let ri=0; ri<N; ri++) {
+    const rnd = rand01(frame * 99991 + idx * 1009 + ri * 127);
+    const offset = (rnd - 0.5) * Math.PI * 0.95;
+    const dx = Math.cos(baseAng + offset);
+    const dy = Math.sin(baseAng + offset);
 
-  let direct = [0,0,0], indirect = [0,0,0], contribs = [];
-  let lightHit = false, shadowOk = false;
+    const hit = traceRay(s.wx, s.wy, dx, dy);
+    let direct=[0,0,0], indirect=[0,0,0];
+    let vis = false;
+    let rayContribs = [];   // per-ray: surfel contributors at this hit point
 
-  if (hit) {
-    const vis = lightVisible(hit.wx, hit.wy);
-    shadowOk = vis;
-    lightHit  = true;
-    if (vis) {
-      const ldx=LT.wx-hit.wx, ldy=LT.wy-hit.wy, ld=Math.hypot(ldx,ldy);
-      const lnx=ldx/ld, lny=ldy/ld;
-      const NdotL = Math.max(0, hit.wall.nx*lnx + hit.wall.ny*lny);
-      const atten  = Math.min(1, LT.intensity/(ld*ld));
-      const b = NdotL * atten;
-      direct = [ hit.wall.col[0]*LT.r*b, hit.wall.col[1]*LT.g*b, hit.wall.col[2]*LT.b*b ];
-    }
-
-    if (frame > 0) {
-      let ir=0,ig=0,ib=0,tot=0;
-      for (let i=0; i<surfels.length; i++) {
-        if (i===idx) continue;
-        const ns = surfels[i];
-        if (ns.life===0) continue;
-        const d = Math.hypot(hit.wx-ns.wx, hit.wy-ns.wy);
-        if (d < SR) {
-          const dotN   = Math.max(0, hit.wall.nx*ns.nx + hit.wall.ny*ns.ny);
-          const df     = 1 - d/SR;
-          const w      = smstep(dotN) * smstep(df);
-          if (w > 0.005) {
-            ir+=ns.sh[0]*w; ig+=ns.sh[1]*w; ib+=ns.sh[2]*w; tot+=w;
-            contribs.push({s:ns, w});
+    if (hit) {
+      vis = lightVisible(hit.wx, hit.wy);
+      if (vis) {
+        const ldx=LT.wx-hit.wx, ldy=LT.wy-hit.wy, ld=Math.hypot(ldx,ldy);
+        const lnx=ldx/ld, lny=ldy/ld;
+        const NdotL = Math.max(0, hit.wall.nx*lnx + hit.wall.ny*lny);
+        const atten  = Math.min(1, LT.intensity/(ld*ld));
+        const b = NdotL * atten;
+        direct = [hit.wall.col[0]*LT.r*b, hit.wall.col[1]*LT.g*b, hit.wall.col[2]*LT.b*b];
+      }
+      if (frame > 0) {
+        let ir=0,ig=0,ib=0,tot=0;
+        for (let i=0; i<surfels.length; i++) {
+          if (i===idx) continue;
+          const ns=surfels[i];
+          if (ns.life===0) continue;
+          const d=Math.hypot(hit.wx-ns.wx, hit.wy-ns.wy);
+          if (d<SR) {
+            const dotN=Math.max(0, hit.wall.nx*ns.nx+hit.wall.ny*ns.ny);
+            const w2=smstep(dotN)*smstep(1-d/SR);
+            if (w2>0.005) {
+              ir+=ns.sh[0]*w2; ig+=ns.sh[1]*w2; ib+=ns.sh[2]*w2; tot+=w2;
+              rayContribs.push({s:ns, w:w2});
+            }
           }
         }
+        if (tot>0) indirect=[ir/tot/Math.PI, ig/tot/Math.PI, ib/tot/Math.PI];
       }
-      if (tot > 0) {
-        indirect = [ir/tot/Math.PI, ig/tot/Math.PI, ib/tot/Math.PI];
-      }
+    } else {
+      direct=[0.03,0.04,0.08];
     }
-  } else {
-    direct = [0.03, 0.04, 0.08];
+
+    // 모든 ray에 direct, indirect, contribs 저장
+    allRays.push({ dx, dy, hit, vis, direct, indirect, contribs: rayContribs });
+    sumDir[0]+=direct[0];  sumDir[1]+=direct[1];  sumDir[2]+=direct[2];
+    sumInd[0]+=indirect[0];sumInd[1]+=indirect[1];sumInd[2]+=indirect[2];
   }
 
-  const total = [direct[0]+indirect[0], direct[1]+indirect[1], direct[2]+indirect[2]];
-  const alpha = s.life===0 ? 1.0 : 0.28;
-  const newSH = [
+  const avgDir=[sumDir[0]/N, sumDir[1]/N, sumDir[2]/N];
+  const avgInd=[sumInd[0]/N, sumInd[1]/N, sumInd[2]/N];
+  const total=[avgDir[0]+avgInd[0], avgDir[1]+avgInd[1], avgDir[2]+avgInd[2]];
+
+  const alpha = 1.0 / (s.life + 1);
+  const newSH=[
     s.sh[0]*(1-alpha)+total[0]*alpha,
     s.sh[1]*(1-alpha)+total[1]*alpha,
     s.sh[2]*(1-alpha)+total[2]*alpha,
   ];
 
-  return { idx, dx, dy, hit, direct, indirect, contribs, newSH, lightHit, shadowOk };
+  const firstHit = allRays.find(r=>r.hit)?.hit || null;
+
+  return {
+    idx, allRays, firstHit,
+    dx: allRays[0].dx, dy: allRays[0].dy, hit: firstHit,
+    direct: avgDir, indirect: avgInd, contribs: allRays[0]?.contribs || [],
+    newSH, lightHit: !!firstHit, shadowOk: allRays[0]?.vis||false
+  };
 }
 
 function applySH(idx, sh) {
@@ -385,7 +427,8 @@ function drawWalls(giMode) {
         // Row 2 — indirect only, offset + amplified
         const ox = px + w.nx*NORM_OFF_PX;
         const oy = py + w.ny*NORM_OFF_PX;
-        ctx.fillStyle = rgb2css(w.col[0]*ir*GI_IND_AMP, w.col[1]*ig*GI_IND_AMP, w.col[2]*ib*GI_IND_AMP);
+        // albedo 곱 없음 — 순수하게 도착하는 간접광 irradiance 색상만 표시
+        ctx.fillStyle = rgb2css(ir*GI_IND_AMP, ig*GI_IND_AMP, ib*GI_IND_AMP);
         ctx.fillRect(ox-HALF, oy-HALF, HALF*2, HALF*2);
       }
 
@@ -490,175 +533,257 @@ function drawLight() {
 // ── animation overlay ─────────────────────────────────
 function drawAnim(now) {
   if (animIdx<0 || animStart<0) return;
-  const rawT = (now - animStart) / animDur;
-  const animT = Math.min(1, rawT);
+  const animT = Math.min(1, (now - animStart) / animDur);
 
-  const s  = surfels[animIdx];
+  const s = surfels[animIdx];
   const [sx,sy] = w2s(s.wx, s.wy);
   const res = animResult;
   if (!res) return;
 
-  // ① Surfel select pulse (0 – 0.10)
-  if (animT < 0.1) {
-    const pulse = Math.sin(animT * Math.PI * 10) * 0.5 + 0.5;
-    ctx.beginPath(); ctx.arc(sx,sy,8+pulse*5,0,Math.PI*2);
-    ctx.strokeStyle=`rgba(255,255,80,${0.4+0.4*pulse})`; ctx.lineWidth=2; ctx.stroke();
+  const rays = res.allRays || [];
+  const N = rays.length || 1;
+  const [lx,ly] = w2s(LT.wx, LT.wy);
+
+  // ① Select pulse (0.00–0.09)
+  if (animT < 0.10) {
+    const p = Math.sin(animT * Math.PI * 10) * 0.5 + 0.5;
+    ctx.beginPath(); ctx.arc(sx,sy,8+p*6,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,255,80,${0.35+0.45*p})`; ctx.lineWidth=2; ctx.stroke();
+    setPhase(`Surfel #${animIdx+1} 선택`, '#ffcc00');
   }
 
-  // ② Ray extending (0.08 – 0.28)
+  // ② N rays extend simultaneously (0.08–0.34)
   if (animT > 0.08) {
-    const rp = clamp01((animT-0.08)/0.20);
-    const maxD = res.hit ? res.hit.t : 30;
-    const ex = s.wx + res.dx * maxD * rp;
-    const ey = s.wy + res.dy * maxD * rp;
-    const [epx,epy] = w2s(ex,ey);
+    const rp = clamp01((animT-0.08)/0.26);
     ctx.save();
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(epx,epy);
-    ctx.strokeStyle='rgba(255,255,60,0.75)'; ctx.lineWidth=1.5;
-    ctx.setLineDash([5,3]); ctx.stroke(); ctx.setLineDash([]);
-    // arrowhead
-    if (rp > 0.3) {
-      const ang = Math.atan2(epy-sy, epx-sx);
-      ctx.beginPath();
-      ctx.moveTo(epx,epy);
-      ctx.lineTo(epx-8*Math.cos(ang-0.4),epy-8*Math.sin(ang-0.4));
-      ctx.lineTo(epx-8*Math.cos(ang+0.4),epy-8*Math.sin(ang+0.4));
-      ctx.closePath();
-      ctx.fillStyle='rgba(255,255,60,0.75)'; ctx.fill();
+    ctx.setLineDash([4,3]);
+    for (const ray of rays) {
+      const maxD = ray.hit ? ray.hit.t : 28;
+      const [epx,epy] = w2s(s.wx+ray.dx*maxD*rp, s.wy+ray.dy*maxD*rp);
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(epx,epy);
+      ctx.strokeStyle=`rgba(255,255,60,${0.55/Math.sqrt(N)})`; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // arrowheads when nearly done
+    if (rp > 0.7) {
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [epx,epy] = w2s(ray.hit.wx, ray.hit.wy);
+        const ang = Math.atan2(epy-sy, epx-sx);
+        ctx.beginPath();
+        ctx.moveTo(epx,epy);
+        ctx.lineTo(epx-7*Math.cos(ang-0.4),epy-7*Math.sin(ang-0.4));
+        ctx.lineTo(epx-7*Math.cos(ang+0.4),epy-7*Math.sin(ang+0.4));
+        ctx.closePath();
+        ctx.fillStyle=`rgba(255,255,60,${0.6*rp})`; ctx.fill();
+      }
     }
     ctx.restore();
+    if (animT < 0.33) setPhase(`② Ray ×${N} 발사 (법선 반구 랜덤 샘플)`, '#ffee88');
   }
 
-  // ③ Hit point (0.28 – 0.42)
-  if (animT > 0.28 && res.hit) {
-    const hp = clamp01((animT-0.28)/0.14);
-    const [hx,hy] = w2s(res.hit.wx, res.hit.wy);
-    ctx.beginPath(); ctx.arc(hx,hy,5+hp*4,0,Math.PI*2);
-    ctx.fillStyle=rgb2css(res.hit.wall.col[0],res.hit.wall.col[1],res.hit.wall.col[2],0.8*hp);
-    ctx.fill();
-  }
-
-  // ④ Direct light: shadow ray + label (0.40 – 0.62)
-  if (animT > 0.40 && res.hit) {
-    const dp = clamp01((animT-0.40)/0.22);
-    const [hx,hy] = w2s(res.hit.wx, res.hit.wy);
-    const [lx,ly] = w2s(LT.wx, LT.wy);
-    // shadow ray
-    ctx.save();
-    ctx.beginPath(); ctx.moveTo(hx,hy);
-    ctx.lineTo(hx+(lx-hx)*dp, hy+(ly-hy)*dp);
-    if (res.shadowOk) {
-      ctx.strokeStyle=`rgba(255,220,80,${0.7*dp})`; ctx.lineWidth=1.5;
-    } else {
-      ctx.strokeStyle=`rgba(255,60,60,${0.7*dp})`; ctx.lineWidth=1.5;
-      ctx.setLineDash([3,3]);
+  // ③ Hit points glow (0.30–0.46)
+  if (animT > 0.30) {
+    const hp = clamp01((animT-0.30)/0.16);
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy] = w2s(ray.hit.wx, ray.hit.wy);
+      ctx.beginPath(); ctx.arc(hx,hy,4+hp*4,0,Math.PI*2);
+      ctx.fillStyle=rgb2css(ray.hit.wall.col[0],ray.hit.wall.col[1],ray.hit.wall.col[2],0.75*hp);
+      ctx.fill();
     }
-    ctx.stroke(); ctx.setLineDash([]);
-    ctx.restore();
-    // direct label
-    if (dp > 0.6) {
-      const dr = res.direct, label = res.shadowOk ? `직접광: (${dr[0].toFixed(2)},${dr[1].toFixed(2)},${dr[2].toFixed(2)})` : '직접광: 0 (차단)';
-      ctx.fillStyle=`rgba(255,230,80,${dp})`;
-      ctx.font='bold 10px Consolas';
-      ctx.fillText(label, hx+10, hy-10);
-      if (animT > 0.58 && animIdx>=0) {
+    if (animT < 0.43) setPhase(`③ Hit point ×${rays.filter(r=>r.hit).length} 표면 색상 획득`, '#ff9944');
+  }
+
+  // ④ Direct: N shadow rays simultaneously (0.42–0.64)
+  if (animT > 0.42) {
+    const dp = clamp01((animT-0.42)/0.22);
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy] = w2s(ray.hit.wx, ray.hit.wy);
+      ctx.save();
+      ctx.beginPath(); ctx.moveTo(hx,hy);
+      ctx.lineTo(hx+(lx-hx)*dp, hy+(ly-hy)*dp);
+      if (ray.vis) {
+        ctx.strokeStyle=`rgba(255,215,70,${0.65*dp})`; ctx.lineWidth=1.5;
+      } else {
+        ctx.strokeStyle=`rgba(255,60,60,${0.45*dp})`; ctx.lineWidth=1;
+        ctx.setLineDash([3,3]);
+      }
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.restore();
+    }
+    if (dp > 0.55) {
+      const litCount = rays.filter(r=>r.hit && r.vis).length;
+      const fontSize = N > 2 ? '9px' : '10px';
+      // 모든 hit point에 각자의 직접광 값 표시
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [hx,hy]=w2s(ray.hit.wx, ray.hit.wy);
+        const dc=ray.direct;
+        const label = N===1
+          ? `직접광: (${dc[0].toFixed(2)},${dc[1].toFixed(2)},${dc[2].toFixed(2)})`
+          : `(${dc[0].toFixed(1)},${dc[1].toFixed(1)},${dc[2].toFixed(1)})`;
+        ctx.fillStyle=`rgba(255,230,80,${dp})`;
+        ctx.font=`bold ${fontSize} Consolas`;
+        ctx.fillText(label, hx+6, hy-6);
+      }
+      setPhase(`④ 직접광 계산 (Shadow Ray ×${N})<br>${litCount}/${N} hit에 광원 보임`, '#ffe060');
+      if (dp > 0.85 && animIdx>=0) {
         const s2=surfels[animIdx];
-        const tag=res.shadowOk?'ld':'ls';
-        if (!s2['_logged_'+tag+'_'+frame]) { s2['_logged_'+tag+'_'+frame]=true;
-          if (res.shadowOk) addLog(`<span class="ld">#${animIdx+1} 직접광 (${dr[0].toFixed(2)},${dr[1].toFixed(2)},${dr[2].toFixed(2)})</span>`);
-          else              addLog(`<span class="ld">#${animIdx+1} 직접광: 차단됨</span>`);
+        if (!s2['_logd_'+frame]) { s2['_logd_'+frame]=true;
+          const dr=res.direct;
+          addLog(`<span class="ld">#${animIdx+1} 직접광 avg (${dr[0].toFixed(2)},${dr[1].toFixed(2)},${dr[2].toFixed(2)})</span>`);
         }
       }
     }
   }
 
-  // ⑤ Indirect: SH contribution arrows (0.60 – 0.82) — only frame > 0
-  if (animT > 0.60 && frame > 0 && res.hit && res.contribs.length > 0) {
-    const ip = clamp01((animT-0.60)/0.22);
-    const [hx,hy] = w2s(res.hit.wx, res.hit.wy);
-    const maxW = Math.max(...res.contribs.map(c=>c.w));
+  // ⑤ Indirect — Surfel broadcast pulses → hit point (0.62–0.86)
+  if (animT > 0.62) {
+    const ip = clamp01((animT-0.62)/0.24);
+    const qh = res.firstHit;
 
-    for (const c of res.contribs) {
-      const [cx2,cy2] = w2s(c.s.wx, c.s.wy);
-      const alpha = ip * clamp01(c.w/maxW*2);
-      const thick = 1 + c.w/maxW * 3;
-      // arrow from surfel to hit
+    if (frame === 0 || !qh) {
+      if (qh) {
+        const [hx,hy]=w2s(qh.wx,qh.wy);
+        ctx.fillStyle=`rgba(100,120,160,${ip*0.8})`;
+        ctx.font='10px Consolas';
+        ctx.fillText('간접광: 없음 (첫 프레임)', hx+8, hy+14);
+      }
+      if (ip > 0.3) setPhase('⑤ 간접광: 없음 (첫 프레임에는 SH 데이터 없음)', '#6680aa');
+    } else {
+      const ringT   = clamp01(ip / 0.72);
+      const travelT = clamp01(ip / 0.82);
+      const accumT  = clamp01((ip-0.45) / 0.55);
+      const fontSize = N > 2 ? '9px' : '10px';
+      let totalContribCount = 0;
+
+      // 모든 ray의 hit point에서 독립적으로 간접광 애니메이션
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [hx,hy] = w2s(ray.hit.wx, ray.hit.wy);
+        const contribs = ray.contribs || [];
+        totalContribCount = Math.max(totalContribCount, contribs.length);
+        const maxW = contribs.length ? Math.max(...contribs.map(c=>c.w)) : 1;
+
+        for (const c of contribs) {
+          const [cx2,cy2] = w2s(c.s.wx, c.s.wy);
+          const wNorm = c.w / maxW;
+
+          // ① Burst ring: 0 → SR_PX 까지 팽창 후 페이드
+          const burstR = ringT * SR_PX;
+          const burstAlpha = (1 - ringT) * (0.45 + 0.55*wNorm);
+          if (burstAlpha > 0.01) {
+            ctx.save();
+            ctx.beginPath(); ctx.arc(cx2,cy2, burstR, 0, Math.PI*2);
+            ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], burstAlpha);
+            ctx.lineWidth=1.5+wNorm*2; ctx.stroke();
+            ctx.restore();
+          }
+
+          // ② Surfel core glow
+          ctx.save();
+          ctx.beginPath(); ctx.arc(cx2,cy2, 6+wNorm*4, 0, Math.PI*2);
+          ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], Math.min(ip*3,1)*0.8);
+          ctx.lineWidth=1.5; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx2,cy2, 3.5, 0, Math.PI*2);
+          ctx.fillStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], Math.min(ip*4,1)*0.55);
+          ctx.fill();
+          ctx.restore();
+
+          // ③ Traveling beam tip: surfel → this ray's hit point
+          const tipX = cx2 + (hx-cx2)*travelT;
+          const tipY = cy2 + (hy-cy2)*travelT;
+          ctx.save();
+          ctx.beginPath(); ctx.moveTo(cx2,cy2); ctx.lineTo(tipX,tipY);
+          ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], 0.6*(0.3+0.7*wNorm));
+          ctx.lineWidth=1.5+wNorm*2; ctx.stroke();
+          ctx.restore();
+          // glowing tip
+          const tipSz = 3.5 + wNorm*3.5;
+          const gc2=ctx.createRadialGradient(tipX,tipY,0,tipX,tipY,tipSz*2);
+          gc2.addColorStop(0,rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],0.95));
+          gc2.addColorStop(1,rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],0));
+          ctx.fillStyle=gc2;
+          ctx.beginPath(); ctx.arc(tipX,tipY,tipSz*2,0,Math.PI*2); ctx.fill();
+        }
+
+        // ④ Accumulated glow at this hit point (×5 for visibility)
+        if (ip > 0.45) {
+          const [ir2,ig2,ib2] = ray.indirect;           // 원본 값 (라벨용)
+          const AMP = 5;
+          const r2=ir2*AMP, g2=ig2*AMP, b2=ib2*AMP;   // ×5 시각화용
+          const glowR = 10 + accumT*14;
+          const gc=ctx.createRadialGradient(hx,hy,0,hx,hy,glowR);
+          gc.addColorStop(0, rgb2css(r2,g2,b2, 0.88*accumT));
+          gc.addColorStop(0.5,rgb2css(r2,g2,b2, 0.45*accumT));
+          gc.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.beginPath(); ctx.arc(hx,hy,glowR,0,Math.PI*2);
+          ctx.fillStyle=gc; ctx.fill();
+
+          if (accumT > 0.55) {
+            ctx.fillStyle=`rgba(80,200,255,${accumT*0.85})`;
+            ctx.font=`bold ${fontSize} Consolas`;
+            const label = N===1
+              ? `간접광: (${ir2.toFixed(2)},${ig2.toFixed(2)},${ib2.toFixed(2)})`
+              : `(${ir2.toFixed(1)},${ig2.toFixed(1)},${ib2.toFixed(1)})`;
+            ctx.fillText(label, hx+7, hy+15);
+          }
+        }
+      }
+
+      if (ip > 0.7 && animIdx>=0) {
+        const s3=surfels[animIdx];
+        if (!s3['_logi_'+frame]) { s3['_logi_'+frame]=true;
+          const ind=res.indirect;
+          addLog(`<span class="li">#${animIdx+1} 간접광 avg (${ind[0].toFixed(2)},${ind[1].toFixed(2)},${ind[2].toFixed(2)}) ← 최대 ${totalContribCount}개 surfel</span>`);
+        }
+      }
+
+      setPhase(`⑤ 간접광: 각 hit point에서<br>반경 내 Surfel SH 파동 → 누적`, '#44ccff');
+    }
+  }
+
+  // ⑥ Accumulate back to surfel (0.83–1.00)
+  if (animT > 0.83) {
+    const ap = clamp01((animT-0.83)/0.17);
+    const total=[res.direct[0]+res.indirect[0], res.direct[1]+res.indirect[1], res.direct[2]+res.indirect[2]];
+
+    // Beams from all hit points converging to source surfel
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+      const bx=hx+(sx-hx)*ap, by=hy+(sy-hy)*ap;
       ctx.save();
-      ctx.beginPath(); ctx.moveTo(cx2,cy2); ctx.lineTo(hx,hy);
-      ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],alpha*0.75);
-      ctx.lineWidth=thick; ctx.stroke();
-      // contributor ring
-      ctx.beginPath(); ctx.arc(cx2,cy2,9,0,Math.PI*2);
-      ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],alpha*0.9);
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(bx,by);
+      ctx.strokeStyle=rgb2css(total[0],total[1],total[2],0.7);
       ctx.lineWidth=2; ctx.stroke();
       ctx.restore();
     }
 
-    // blended indirect color at hit
-    if (ip > 0.5) {
-      const ip2 = clamp01((ip-0.5)*2);
-      const [r2,g2,b2]=res.indirect;
-      const [hx2,hy2]=w2s(res.hit.wx,res.hit.wy);
-      const gc=ctx.createRadialGradient(hx2,hy2,0,hx2,hy2,20);
-      gc.addColorStop(0,rgb2css(r2,g2,b2,0.85*ip2));
-      gc.addColorStop(1,rgb2css(r2,g2,b2,0));
-      ctx.beginPath();ctx.arc(hx2,hy2,20,0,Math.PI*2);
-      ctx.fillStyle=gc; ctx.fill();
-      if (ip2>0.7 && animIdx>=0) {
-        const s3=surfels[animIdx];
-        if (!s3['_loggedind_'+frame]) { s3['_loggedind_'+frame]=true;
-          const ind=res.indirect;
-          addLog(`<span class="li">#${animIdx+1} 간접광 (${ind[0].toFixed(2)},${ind[1].toFixed(2)},${ind[2].toFixed(2)}) — ${res.contribs.length}개 surfel</span>`);
-        }
-      }
-    }
-  } else if (animT > 0.60 && frame === 0 && res.hit) {
-    const ip=clamp01((animT-0.60)/0.22);
-    if (ip>0.4) {
-      const [hx,hy]=w2s(res.hit.wx,res.hit.wy);
-      ctx.fillStyle=`rgba(100,120,160,${ip*0.8})`;
-      ctx.font='10px Consolas';
-      ctx.fillText('간접광: 없음 (첫 프레임)', hx+10, hy+14);
-    }
-  }
-
-  // ⑥ Accumulate beam back to surfel (0.80 – 0.97)
-  if (animT > 0.80) {
-    const ap = clamp01((animT-0.80)/0.17);
-    const total=[res.direct[0]+res.indirect[0], res.direct[1]+res.indirect[1], res.direct[2]+res.indirect[2]];
-
-    if (res.hit) {
-      const [hx,hy]=w2s(res.hit.wx,res.hit.wy);
-      const ex2=hx+(sx-hx)*ap, ey2=hy+(sy-hy)*ap;
-      ctx.save();
-      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(ex2,ey2);
-      ctx.strokeStyle=rgb2css(total[0],total[1],total[2],0.9);
-      ctx.lineWidth=3; ctx.stroke();
-      ctx.restore();
-    }
-
-    // Apply SH at 50% of accumulate phase
-    if (ap > 0.5 && !shApplied) {
-      shApplied = true;
+    if (ap > 0.45 && !shApplied) {
+      shApplied=true;
       applySH(pendingSH.idx, pendingSH.sh);
       const sh=pendingSH.sh;
       addLog(`<span class="la">#${animIdx+1} SH ← (${sh[0].toFixed(2)},${sh[1].toFixed(2)},${sh[2].toFixed(2)})</span>`);
     }
 
-    // Surfel glow
-    const sg=clamp01((ap-0.5)*2);
-    ctx.beginPath();ctx.arc(sx,sy,8+sg*8,0,Math.PI*2);
+    const sg=clamp01((ap-0.45)/0.55);
+    ctx.beginPath();ctx.arc(sx,sy,8+sg*10,0,Math.PI*2);
     ctx.strokeStyle=rgb2css(total[0],total[1],total[2],sg*0.9);
-    ctx.lineWidth=2; ctx.stroke();
+    ctx.lineWidth=2.5; ctx.stroke();
+
+    setPhase(`⑥ 평균 radiance → SH 누적<br>life=${s.life}, running avg`, '#00ee66');
   }
 
-  // Done?
+  // Done
   if (animT >= 1.0) {
     if (!shApplied) { shApplied=true; applySH(pendingSH.idx,pendingSH.sh); }
     animIdx=-1; animStart=-1; animResult=null;
-    setPhase('단계 완료', '#00ee66');
+    setPhase('단계 완료 ✓', '#00ee66');
     updateStats();
-    if (autoRunning) autoTmr = setTimeout(stepOne, 400);
+    if (autoRunning) autoTmr=setTimeout(stepOne,350);
   }
 }
 
@@ -719,6 +844,20 @@ document.getElementById('btn-frame').addEventListener('click', () => {
     addLog(`<span class="lf">── 프레임 ${frame} 시작 ──</span>`);
   }
   finishCurrentFrame();
+});
+
+// 속도 슬라이더: 1=0.33×, 2=0.5×, 3=1×, 4=1.5×, 5=2×, 6=3×, 7=5×, 8=8×
+const SPEED_MAP = [0.33, 0.5, 1, 1.5, 2, 3, 5, 8];
+document.getElementById('speed-slider').addEventListener('input', function() {
+  const speed = SPEED_MAP[parseInt(this.value) - 1];
+  animDur = Math.round(3200 / speed);
+  document.getElementById('speed-label').textContent = speed + '×';
+});
+
+document.getElementById('btn-rays').addEventListener('click', () => {
+  const cur = RAY_OPTIONS.indexOf(RAYS_PER_SURFEL);
+  RAYS_PER_SURFEL = RAY_OPTIONS[(cur+1) % RAY_OPTIONS.length];
+  document.getElementById('btn-rays').textContent = `Ray 수: ${RAYS_PER_SURFEL}`;
 });
 
 document.getElementById('btn-render').addEventListener('click', () => {
