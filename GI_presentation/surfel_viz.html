@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>SurfelGI — Surfel 배치 과정 시각화</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d0d1a;
+  color: #ddd;
+  font-family: 'Consolas', 'Courier New', monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px;
+  min-height: 100vh;
+}
+h1 {
+  color: #00d4ff;
+  font-size: 1.3em;
+  margin-bottom: 4px;
+  letter-spacing: 1px;
+}
+.subtitle {
+  color: #556;
+  font-size: 0.78em;
+  margin-bottom: 14px;
+}
+#main {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+canvas {
+  border: 1px solid #223;
+  border-radius: 6px;
+  background: #080810;
+  display: block;
+}
+#sidebar {
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.panel {
+  background: #0d0d20;
+  border: 1px solid #223;
+  border-radius: 6px;
+  padding: 12px;
+}
+.panel-title {
+  color: #00d4ff;
+  font-size: 0.75em;
+  font-weight: bold;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8em;
+  margin: 5px 0;
+}
+.stat-label { color: #778; }
+.stat-val { color: #fff; font-weight: bold; }
+.stat-val.good { color: #00ff88; }
+.stat-val.warn { color: #ffcc00; }
+.stat-val.bad  { color: #ff5555; }
+
+#phase-box {
+  background: #0a0a1e;
+  border-left: 3px solid #00d4ff;
+  border-radius: 0 4px 4px 0;
+  padding: 8px 10px;
+  font-size: 0.78em;
+  line-height: 1.6;
+  min-height: 52px;
+  color: #ccc;
+  transition: border-color 0.3s;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.75em;
+  margin: 4px 0;
+  color: #aaa;
+}
+.dot {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1.5px solid transparent;
+}
+
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  justify-content: center;
+}
+button {
+  background: #111825;
+  color: #ccc;
+  border: 1px solid #334;
+  padding: 7px 13px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.78em;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+button:hover { background: #1a2a3a; border-color: #00d4ff; color: #fff; }
+button.active { background: #0a3050; border-color: #00aaff; color: #00d4ff; }
+button.warn-btn { border-color: #ff8800; }
+button.warn-btn:hover { background: #2a1500; color: #ffaa44; }
+
+.note {
+  font-size: 0.7em;
+  color: #445;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+</style>
+</head>
+<body>
+<h1>SurfelGI — Surfel 배치 과정 시각화</h1>
+<p class="subtitle">Coverage 계산 → Dead List 배치 → Frustum 외부 재활용</p>
+
+<div id="main">
+  <div>
+    <canvas id="canvas" width="680" height="480"></canvas>
+    <div id="controls">
+      <button id="btn-auto">▶ 자동 실행</button>
+      <button id="btn-cov">① Coverage 계산</button>
+      <button id="btn-spawn">② Surfel 배치</button>
+      <button id="btn-exhaust" class="warn-btn">Dead List 소진</button>
+      <button id="btn-reset">↺ 초기화</button>
+    </div>
+    <div id="cam-controls" style="display:flex;align-items:center;gap:8px;margin-top:8px;justify-content:center;flex-wrap:wrap;">
+      <span style="font-size:0.75em;color:#556;">이동 (← →)</span>
+      <button id="btn-cam-left"  style="padding:6px 14px;font-size:1em;">◀</button>
+      <button id="btn-cam-right" style="padding:6px 14px;font-size:1em;">▶</button>
+      <span style="font-size:0.75em;color:#556;margin-left:6px;">회전 (Q / E)</span>
+      <button id="btn-rot-left"  style="padding:6px 14px;font-size:1em;">↺</button>
+      <button id="btn-rot-right" style="padding:6px 14px;font-size:1em;">↻</button>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="panel">
+      <div class="panel-title">상태</div>
+      <div class="stat-row"><span class="stat-label">Alive surfels</span><span class="stat-val" id="s-alive">0</span></div>
+      <div class="stat-row"><span class="stat-label">Dead List 남은 수</span><span class="stat-val" id="s-dead">0</span></div>
+      <div class="stat-row"><span class="stat-label">최저 Coverage</span><span class="stat-val" id="s-mincov">—</span></div>
+      <div class="stat-row"><span class="stat-label">Coverage 목표</span><span class="stat-val good">0.8</span></div>
+      <div class="stat-row"><span class="stat-label">카메라 X</span><span class="stat-val" id="s-camx">12.0</span></div>
+      <div class="stat-row"><span class="stat-label">카메라 각도</span><span class="stat-val" id="s-camang">-90°</span></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">현재 단계</div>
+      <div id="phase-box">초기 상태</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">범례</div>
+      <div class="legend-row"><div class="dot" style="background:#00ee66"></div>Coverage ≥ 0.8 (충분)</div>
+      <div class="legend-row"><div class="dot" style="background:#ffcc00"></div>Coverage 0 ~ 0.8 (부족)</div>
+      <div class="legend-row"><div class="dot" style="background:#ff4444"></div>Coverage = 0 (없음)</div>
+      <div class="legend-row"><div class="dot" style="background:#888"></div>Frustum 외부 (측정 제외)</div>
+      <div style="margin: 6px 0; border-top: 1px solid #223;"></div>
+      <div class="legend-row"><div class="dot" style="background:#00aaff;border-color:#fff"></div>Surfel (Frustum 내부)</div>
+      <div class="legend-row"><div class="dot" style="background:#ff8800;border-color:#fff"></div>Surfel (Frustum 외부)</div>
+      <div class="legend-row"><div class="dot" style="background:#ff4444;border-color:#ffff00"></div>재활용 대상 Surfel</div>
+      <div class="legend-row"><div class="dot" style="background:#ffff00"></div>배치 목표 지점</div>
+      <div style="margin: 6px 0; border-top: 1px solid #223;"></div>
+      <div class="legend-row"><div class="dot" style="background:rgba(0,120,255,0.3);border:1.5px solid #4488ff;border-radius:0"></div>Camera Frustum</div>
+    </div>
+
+    <div class="panel">
+      <div class="note">
+        Coverage = Σ smoothstep(1 − dist/r)<br>
+        반경 r = 2 world unit<br><br>
+        Dead List 잔여 시 → 새 surfel 배치<br>
+        Dead List 소진 시 → frustum 외부 surfel을 재활용해 이동
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ── world config ──────────────────────────────────────
+const SCALE = 28;          // px per world unit
+const SURFEL_R = 2;        // world units
+const SURFEL_R_PX = SURFEL_R * SCALE;
+const COV_TARGET = 0.8;
+const MAX_POOL = 20;
+const SAMPLE_STEP = 0.45;  // surface sample spacing (world units)
+
+function w2s(wx, wy) { return [wx * SCALE, wy * SCALE]; }
+
+// ── scene geometry ─────────────────────────────────────
+// All coords in world units. Origin = canvas top-left.
+const walls = [
+  [1,  1,  23, 1 ],   // top wall (horizontal)
+  [1,  1,  1,  15],   // left wall
+  [23, 1,  23, 15],   // right wall
+  [1,  15, 23, 15],   // bottom wall
+  [5,  5,  14, 5 ],   // inner shelf (horizontal)
+  [5,  5,  5,  10],   // inner shelf left side
+  [14, 5,  14, 9 ],   // inner shelf right side
+  [9,  9,  16, 9 ],   // second shelf
+];
+
+// camera: world position, look angle, FOV, max range
+const CAM = { wx: 12, wy: 13.5, angle: -Math.PI/2, fov: 1.0, range: 16 };
+const CAM_SPEED  = 0.08;  // world units per frame
+const CAM_ROT    = 0.022; // radians per frame
+const CAM_MIN_X  = 2;
+const CAM_MAX_X  = 22;
+
+// ── keyboard / button held state ──────────────────────
+const keys = new Set();
+document.addEventListener('keydown', e => {
+  if (['ArrowLeft','ArrowRight','q','Q','e','E'].includes(e.key)) {
+    e.preventDefault();
+    keys.add(e.key.toLowerCase());
+  }
+});
+document.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+function hookHold(id, key) {
+  const btn = document.getElementById(id);
+  btn.addEventListener('mousedown',  () => keys.add(key));
+  btn.addEventListener('mouseup',    () => keys.delete(key));
+  btn.addEventListener('mouseleave', () => keys.delete(key));
+  btn.addEventListener('touchstart', ev => { ev.preventDefault(); keys.add(key); });
+  btn.addEventListener('touchend',   () => keys.delete(key));
+}
+hookHold('btn-cam-left',  'arrowleft');
+hookHold('btn-cam-right', 'arrowright');
+hookHold('btn-rot-left',  'q');
+hookHold('btn-rot-right', 'e');
+
+function updateCamera() {
+  let moved = false;
+
+  // translation
+  if (keys.has('arrowleft'))  { CAM.wx = Math.max(CAM_MIN_X, CAM.wx - CAM_SPEED); moved = true; }
+  if (keys.has('arrowright')) { CAM.wx = Math.min(CAM_MAX_X, CAM.wx + CAM_SPEED); moved = true; }
+
+  // rotation
+  if (keys.has('q')) { CAM.angle -= CAM_ROT; moved = true; }
+  if (keys.has('e')) { CAM.angle += CAM_ROT; moved = true; }
+
+  if (moved) {
+    document.getElementById('s-camx').textContent = CAM.wx.toFixed(1);
+    const deg = Math.round(CAM.angle * 180 / Math.PI);
+    document.getElementById('s-camang').textContent = deg + '°';
+    if (phase !== 'idle') buildCovData();
+    if (phase === 'coverage') {
+      const { pt, cov } = worstPoint();
+      spawnTgt = pt ? { pt, cov } : null;
+    }
+    updateStats();
+  }
+}
+
+// ── sample points along surfaces ──────────────────────
+function buildSurfacePoints() {
+  const pts = [];
+  for (const [x1,y1,x2,y2] of walls) {
+    const dx = x2-x1, dy = y2-y1;
+    const len = Math.hypot(dx,dy);
+    // outward normal (rotate 90° CW for walls where "inside" matters, simplify here)
+    const nx = -dy/len, ny = dx/len;
+    const steps = Math.ceil(len / SAMPLE_STEP);
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      pts.push({ wx: x1+dx*t, wy: y1+dy*t, nx, ny });
+    }
+  }
+  return pts;
+}
+const surfPts = buildSurfacePoints();
+
+// ── frustum ───────────────────────────────────────────
+function inFrustum(wx, wy) {
+  const dx = wx - CAM.wx, dy = wy - CAM.wy;
+  const dist = Math.hypot(dx, dy);
+  if (dist > CAM.range) return false;
+  let a = Math.atan2(dy, dx) - CAM.angle;
+  while (a >  Math.PI) a -= 2*Math.PI;
+  while (a < -Math.PI) a += 2*Math.PI;
+  return Math.abs(a) <= CAM.fov / 2;
+}
+
+// ── smoothstep ────────────────────────────────────────
+function smstep(x) {
+  const t = Math.max(0, Math.min(1, x));
+  return t*t*(3-2*t);
+}
+
+// ── surfel state ──────────────────────────────────────
+let surfels = [];
+let deadCount = 0;
+
+function initScene() {
+  surfels = [];
+  deadCount = MAX_POOL;
+  // pre-place surfels on various walls
+  const seeds = [
+    [3,1],[6,1],[9,1],[12,1],[15,1],[19,1],[22,1],
+    [1,3],[1,7],[1,11],
+    [23,3],[23,7],[23,11],
+    [7,5],[11,5],[7,9],[12,9],[15,9],
+  ];
+  for (const [sx,sy] of seeds) {
+    let best = null, bd = Infinity;
+    for (const p of surfPts) {
+      const d = Math.hypot(p.wx-sx, p.wy-sy);
+      if (d < bd) { bd=d; best=p; }
+    }
+    if (best && deadCount > 0) {
+      surfels.push({ wx:best.wx, wy:best.wy, alive:true, hi:false, recycling:false });
+      deadCount--;
+    }
+  }
+}
+
+// ── coverage ─────────────────────────────────────────
+function coverage(wx, wy) {
+  let c = 0;
+  for (const s of surfels) {
+    if (!s.alive) continue;
+    const dist = Math.hypot(wx-s.wx, wy-s.wy);
+    if (dist < SURFEL_R) {
+      c += smstep(1 - dist / SURFEL_R);
+    }
+  }
+  return c;
+}
+
+// ── find lowest-coverage in-frustum surface point ────
+function worstPoint() {
+  let minC = Infinity, best = null;
+  for (const p of surfPts) {
+    if (!inFrustum(p.wx, p.wy)) continue;
+    const c = coverage(p.wx, p.wy);
+    if (c < minC) { minC=c; best=p; }
+  }
+  return { pt:best, cov:minC };
+}
+
+// ── find recyclable surfel (outside frustum) ──────────
+function recyclable() {
+  for (const s of surfels) {
+    if (s.alive && !inFrustum(s.wx, s.wy)) return s;
+  }
+  return null;
+}
+
+// ── UI state ──────────────────────────────────────────
+let covData   = [];  // [{wx,wy,cov,inF}]
+let spawnTgt  = null;
+let recycSrc  = null;
+let autoRunning = false;
+let autoTmr   = null;
+let animTmr   = null;
+let phase = 'idle';
+
+function setPhase(html, color='#00d4ff') {
+  const b = document.getElementById('phase-box');
+  b.innerHTML = html;
+  b.style.borderColor = color;
+}
+
+function updateStats() {
+  const alive = surfels.filter(s=>s.alive).length;
+  document.getElementById('s-alive').textContent = alive;
+  document.getElementById('s-dead').textContent = deadCount;
+  if (covData.length) {
+    const inF = covData.filter(d=>d.inF);
+    if (inF.length) {
+      const m = Math.min(...inF.map(d=>d.cov));
+      const el = document.getElementById('s-mincov');
+      el.textContent = m.toFixed(2);
+      el.className = 'stat-val ' + (m >= COV_TARGET ? 'good' : m > 0 ? 'warn' : 'bad');
+    }
+  } else {
+    document.getElementById('s-mincov').textContent = '—';
+    document.getElementById('s-mincov').className = 'stat-val';
+  }
+}
+
+function buildCovData() {
+  covData = surfPts.map(p => ({
+    wx: p.wx, wy: p.wy,
+    cov: coverage(p.wx, p.wy),
+    inF: inFrustum(p.wx, p.wy)
+  }));
+}
+
+// ── step: compute coverage ────────────────────────────
+function stepCoverage() {
+  clearTimeout(animTmr);
+  surfels.forEach(s => { s.hi=false; s.recycling=false; });
+  recycSrc = null;
+  buildCovData();
+  const { pt, cov } = worstPoint();
+  spawnTgt = pt ? { pt, cov } : null;
+  phase = 'coverage';
+
+  if (!spawnTgt || cov >= COV_TARGET) {
+    setPhase('① Coverage 계산 완료<br>모든 픽셀이 목표치 이상<br>배치 불필요', '#00ff88');
+  } else {
+    setPhase(
+      `① Coverage 계산 완료<br>최저 Coverage = <b style="color:#ffcc00">${cov.toFixed(2)}</b><br>(목표: ${COV_TARGET} — 배치 필요)`,
+      '#ffcc00'
+    );
+  }
+  updateStats();
+}
+
+// ── step: spawn / recycle ─────────────────────────────
+function stepSpawn() {
+  clearTimeout(animTmr);
+
+  if (!spawnTgt) {
+    stepCoverage();
+    if (!spawnTgt || spawnTgt.cov >= COV_TARGET) return;
+  }
+  if (spawnTgt && spawnTgt.cov >= COV_TARGET) {
+    setPhase('Coverage 충분 — 배치 불필요', '#00ff88');
+    return;
+  }
+
+  if (deadCount > 0) {
+    // ── Case A: dead list available ──
+    phase = 'spawn';
+    const { wx, wy } = spawnTgt.pt;
+    const ns = { wx, wy, alive:true, hi:true, recycling:false };
+    surfels.push(ns);
+    deadCount--;
+    spawnTgt = null;
+    buildCovData();
+    setPhase(
+      `② Dead List에서 새 Surfel 배치<br>Dead List 잔여: <b style="color:#00aaff">${deadCount}</b>`,
+      '#00aaff'
+    );
+    animTmr = setTimeout(() => {
+      surfels.forEach(s=>s.hi=false);
+      updateStats();
+    }, 900);
+  } else {
+    // ── Case B: dead list exhausted, recycle ──
+    phase = 'recycle';
+    const victim = recyclable();
+    if (!victim) {
+      setPhase('⚠ Dead List 소진<br>재활용 가능한 Surfel 없음<br>(모두 Frustum 내부)', '#ff4444');
+      return;
+    }
+
+    victim.recycling = true;
+    recycSrc = victim;
+    const destPt = spawnTgt.pt;
+
+    setPhase(
+      '② Dead List 소진!<br>Frustum 외부 Surfel → 재활용<br>(빨간 점선 = 재활용 대상)',
+      '#ff8800'
+    );
+    updateStats();
+
+    animTmr = setTimeout(() => {
+      if (!recycSrc) return;
+      recycSrc.wx = destPt.wx;
+      recycSrc.wy = destPt.wy;
+      recycSrc.recycling = false;
+      recycSrc.hi = true;
+      recycSrc = null;
+      spawnTgt = null;
+      buildCovData();
+      setPhase(
+        '② 재활용 완료<br>낮은 Coverage 위치로 Surfel 이동<br>(Dead List 변화 없음)',
+        '#00ff88'
+      );
+      updateStats();
+      animTmr = setTimeout(() => { surfels.forEach(s=>s.hi=false); updateStats(); }, 900);
+    }, 900);
+  }
+  updateStats();
+}
+
+function resetScene() {
+  clearTimeout(animTmr);
+  clearTimeout(autoTmr);
+  autoRunning = false;
+  document.getElementById('btn-auto').textContent = '▶ 자동 실행';
+  document.getElementById('btn-auto').classList.remove('active');
+  phase = 'idle';
+  spawnTgt = null;
+  recycSrc = null;
+  covData = [];
+  initScene();
+  setPhase('초기 상태', '#00d4ff');
+  updateStats();
+}
+
+function exhaustDeadList() {
+  deadCount = 0;
+  setPhase('Dead List 소진됨<br>다음 ② 배치 시 재활용 실행', '#ff8800');
+  updateStats();
+}
+
+// ── auto loop ─────────────────────────────────────────
+function autoStep() {
+  if (!autoRunning) return;
+  stepCoverage();
+  autoTmr = setTimeout(() => {
+    if (!autoRunning) return;
+    stepSpawn();
+    autoTmr = setTimeout(autoStep, 1400);
+  }, 700);
+}
+function toggleAuto() {
+  if (autoRunning) {
+    autoRunning = false;
+    clearTimeout(autoTmr);
+    document.getElementById('btn-auto').textContent = '▶ 자동 실행';
+    document.getElementById('btn-auto').classList.remove('active');
+  } else {
+    autoRunning = true;
+    document.getElementById('btn-auto').textContent = '⏸ 정지';
+    document.getElementById('btn-auto').classList.add('active');
+    autoStep();
+  }
+}
+
+document.getElementById('btn-auto').addEventListener('click', toggleAuto);
+document.getElementById('btn-cov').addEventListener('click', () => { autoRunning=false; stepCoverage(); });
+document.getElementById('btn-spawn').addEventListener('click', () => { autoRunning=false; stepSpawn(); });
+document.getElementById('btn-reset').addEventListener('click', resetScene);
+document.getElementById('btn-exhaust').addEventListener('click', exhaustDeadList);
+
+// ── drawing ────────────────────────────────────────────
+function drawBg() {
+  ctx.fillStyle = '#080810';
+  ctx.fillRect(0,0,W,H);
+
+  // subtle grid
+  ctx.strokeStyle = 'rgba(30,30,60,0.8)';
+  ctx.lineWidth = 0.5;
+  for (let x=0; x<W; x+=SCALE) {
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+  }
+  for (let y=0; y<H; y+=SCALE) {
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+  }
+}
+
+function drawFrustum() {
+  const [cx,cy] = w2s(CAM.wx, CAM.wy);
+  const a1 = CAM.angle - CAM.fov/2, a2 = CAM.angle + CAM.fov/2;
+  const rPx = CAM.range * SCALE;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx,cy,rPx,a1,a2);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(20,80,200,0.07)';
+  ctx.fill();
+  ctx.setLineDash([6,4]);
+  ctx.strokeStyle = 'rgba(60,140,255,0.35)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = 'rgba(80,160,255,0.5)';
+  ctx.font = '10px Consolas';
+  ctx.fillText('Frustum', cx+8, cy - rPx*0.6);
+  ctx.restore();
+}
+
+function covColor(cov, inF) {
+  if (!inF) return 'rgba(100,100,120,0.45)';
+  const c = Math.min(cov, 1.5);
+  if (c >= COV_TARGET) {
+    const t = Math.min((c - COV_TARGET) / 0.5, 1);
+    return `rgba(0,${Math.round(180+60*t)},${Math.round(60+40*t)},0.75)`;
+  } else if (c > 0.01) {
+    const t = c / COV_TARGET;
+    return `rgba(255,${Math.round(200*t)},0,0.75)`;
+  } else {
+    return 'rgba(255,50,50,0.75)';
+  }
+}
+
+function drawCoverage() {
+  for (const d of covData) {
+    const [x,y] = w2s(d.wx, d.wy);
+    ctx.beginPath();
+    ctx.arc(x,y, d.inF ? 4.5 : 3, 0, Math.PI*2);
+    ctx.fillStyle = covColor(d.cov, d.inF);
+    ctx.fill();
+  }
+}
+
+function drawWalls() {
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#2a3a4a';
+  ctx.lineCap = 'round';
+  for (const [x1,y1,x2,y2] of walls) {
+    const [ax,ay] = w2s(x1,y1), [bx,by] = w2s(x2,y2);
+    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+  }
+}
+
+function drawSurfels() {
+  for (const s of surfels) {
+    if (!s.alive) continue;
+    const [cx,cy] = w2s(s.wx, s.wy);
+    const inF = inFrustum(s.wx, s.wy);
+
+    // radius circle
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx,cy,SURFEL_R_PX,0,Math.PI*2);
+    if (s.recycling) {
+      ctx.setLineDash([5,4]);
+      ctx.strokeStyle = 'rgba(255,80,80,0.55)';
+      ctx.fillStyle   = 'rgba(255,40,40,0.07)';
+    } else if (s.hi) {
+      ctx.strokeStyle = 'rgba(255,255,0,0.6)';
+      ctx.fillStyle   = 'rgba(255,255,0,0.07)';
+    } else if (inF) {
+      ctx.strokeStyle = 'rgba(0,170,255,0.25)';
+      ctx.fillStyle   = 'rgba(0,170,255,0.05)';
+    } else {
+      ctx.strokeStyle = 'rgba(255,136,0,0.25)';
+      ctx.fillStyle   = 'rgba(255,136,0,0.05)';
+    }
+    ctx.lineWidth = 1.2;
+    ctx.fill(); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // center dot
+    ctx.beginPath();
+    ctx.arc(cx,cy, s.hi ? 6 : 5, 0, Math.PI*2);
+    if (s.recycling)     ctx.fillStyle = '#ff4444';
+    else if (s.hi)       ctx.fillStyle = '#ffee00';
+    else if (inF)        ctx.fillStyle = '#00aaff';
+    else                 ctx.fillStyle = '#ff8800';
+    ctx.fill();
+
+    if (s.recycling) {
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+}
+
+let pulseT = 0;
+function drawSpawnTarget() {
+  if (!spawnTgt || !spawnTgt.pt) return;
+  if (phase !== 'coverage' && phase !== 'spawn') return;
+  const [cx,cy] = w2s(spawnTgt.pt.wx, spawnTgt.pt.wy);
+  pulseT = (pulseT + 0.04) % 1;
+  const pulse = 0.5 + 0.5 * Math.sin(pulseT * Math.PI * 2);
+
+  ctx.save();
+  // pulsing ring
+  ctx.beginPath();
+  ctx.arc(cx,cy, 9 + pulse*5, 0, Math.PI*2);
+  ctx.strokeStyle = `rgba(255,255,0,${0.4+0.6*pulse})`;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx,cy,4,0,Math.PI*2);
+  ctx.fillStyle = '#ffff00';
+  ctx.fill();
+
+  // label
+  ctx.fillStyle = '#ffff00';
+  ctx.font = 'bold 10px Consolas';
+  ctx.fillText(`cov=${spawnTgt.cov.toFixed(2)}`, cx+10, cy-6);
+  ctx.restore();
+}
+
+function drawCamera() {
+  const [cx,cy] = w2s(CAM.wx, CAM.wy);
+
+  // direction arrow
+  const dx = Math.cos(CAM.angle)*18, dy = Math.sin(CAM.angle)*18;
+  ctx.save();
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+dx,cy+dy); ctx.stroke();
+
+  // camera body
+  ctx.beginPath(); ctx.arc(cx,cy,7,0,Math.PI*2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.strokeStyle = '#00d4ff'; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = 'bold 10px Consolas';
+  ctx.fillText('CAM', cx+10, cy+4);
+  ctx.restore();
+}
+
+function drawWorldLabel() {
+  ctx.fillStyle = 'rgba(80,80,100,0.6)';
+  ctx.font = '10px Consolas';
+  ctx.fillText(`1 cell = ${SCALE}px = 1 world unit    Surfel radius = ${SURFEL_R} world units`, 6, H-6);
+}
+
+function render() {
+  updateCamera();
+  drawBg();
+  drawFrustum();
+  if (phase !== 'idle') drawCoverage();
+  drawWalls();
+  drawSurfels();
+  drawSpawnTarget();
+  drawCamera();
+  drawWorldLabel();
+  requestAnimationFrame(render);
+}
+
+// ── init ───────────────────────────────────────────────
+initScene();
+updateStats();
+render();
+</script>
+</body>
+</html>
