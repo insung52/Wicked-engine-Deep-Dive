@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>DDGI — 간접광 샘플링 시각화</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #09090f; color: #ccc;
+  font-family: 'Consolas', monospace;
+  display: flex; flex-direction: column; align-items: center; padding: 14px;
+}
+h1 { color: #ffaa44; font-size: 1.2em; margin-bottom: 3px; }
+.sub { color: #334; font-size: 0.75em; margin-bottom: 10px; }
+#layout { display: flex; gap: 12px; align-items: flex-start; }
+canvas { border: 1px solid #181828; border-radius: 5px; display: block; }
+#controls { display: flex; gap: 6px; margin-top: 8px; justify-content: center; flex-wrap: wrap; }
+button {
+  background: #0e1420; color: #bbb; border: 1px solid #2a3040;
+  padding: 7px 13px; border-radius: 5px; cursor: pointer;
+  font: 0.77em 'Consolas', monospace; transition: all 0.15s;
+}
+button:hover  { background: #1a2535; border-color: #ffaa44; color: #fff; }
+button.active { background: #2a1800; border-color: #ffaa44; color: #ffaa44; }
+#sidebar { width: 218px; display: flex; flex-direction: column; gap: 8px; }
+.panel { background: #0b0b1a; border: 1px solid #181828; border-radius: 5px; padding: 10px; }
+.ptitle { color: #ffaa44; font-size: 0.7em; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 7px; }
+.srow { display: flex; justify-content: space-between; font-size: 0.77em; margin: 4px 0; }
+.sl { color: #556; } .sv { color: #eee; font-weight: bold; }
+#phasebox {
+  font-size: 0.75em; line-height: 1.7; color: #bbc;
+  border-left: 3px solid #ffaa44; padding: 6px 9px;
+  background: #060610; border-radius: 0 3px 3px 0; min-height: 46px;
+  transition: border-color 0.3s;
+}
+#log {
+  font-size: 0.7em; line-height: 1.75; color: #778;
+  max-height: 155px; overflow-y: auto;
+  background: #060610; border-radius: 3px; padding: 6px 7px;
+}
+.ld { color: #ffe060; } .li { color: #60c8ff; }
+.la { color: #60ee80; } .lf { color: #ffaa44; font-weight: bold; }
+.lrow { display: flex; align-items: center; gap: 6px; font-size: 0.72em; margin: 3px 0; color: #889; }
+.ldot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.ldia { width: 10px; height: 10px; flex-shrink: 0;
+        transform: rotate(45deg); border: 1.5px solid transparent; }
+</style>
+</head>
+<body>
+<h1>DDGI — 간접광 샘플링 시각화</h1>
+<p class="sub">Probe grid → 전방향 Ray 발사 → 직접광(NEE) + 4개 Probe Bilinear 보간(간접광) → SH 누적</p>
+<div id="layout">
+  <div>
+    <canvas id="canvas" width="750" height="480"></canvas>
+    <div id="controls">
+      <button id="btn-step">다음 Probe 계산</button>
+      <button id="btn-frame">현재 프레임 완료</button>
+      <button id="btn-render">GI 렌더링 OFF</button>
+      <button id="btn-rays">Ray 수: 4</button>
+      <button id="btn-reset">↺ 초기화</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;justify-content:center;font-size:0.77em;color:#667;">
+      <span>애니메이션 속도</span>
+      <input type="range" id="speed-slider" min="1" max="8" step="1" value="3"
+        style="width:130px;accent-color:#ffaa44;cursor:pointer;">
+      <span id="speed-label" style="color:#ffaa44;min-width:28px;font-weight:bold;">1×</span>
+    </div>
+  </div>
+  <div id="sidebar">
+    <div class="panel">
+      <div class="ptitle">프레임 정보</div>
+      <div class="srow"><span class="sl">현재 프레임</span><span class="sv" id="s-frame">0</span></div>
+      <div class="srow"><span class="sl">남은 Probe</span><span class="sv" id="s-remain">—</span></div>
+      <div class="srow"><span class="sl">활성 Probe</span><span class="sv" id="s-active">—</span></div>
+    </div>
+    <div class="panel">
+      <div class="ptitle">현재 단계</div>
+      <div id="phasebox">초기 상태<br>버튼을 눌러 시작하세요</div>
+    </div>
+    <div class="panel">
+      <div class="ptitle">계산 로그</div>
+      <div id="log">—</div>
+    </div>
+    <div class="panel">
+      <div class="ptitle">범례</div>
+      <div class="lrow"><div class="ldia" style="background:#ffff44;border-color:#fff"></div>활성 Probe</div>
+      <div class="lrow"><div class="ldia" style="background:#ffaa44;border-color:#888"></div>Probe (SH 데이터 있음)</div>
+      <div class="lrow"><div class="ldia" style="background:#2a3040;border-color:#445"></div>Probe (SH 없음)</div>
+      <div class="lrow"><div style="width:14px;height:1px;background:rgba(60,70,100,0.8);border-top:1px dashed #334"></div>Probe 격자</div>
+      <div class="lrow"><div class="ldot" style="background:rgba(255,170,0,0.2);outline:1px solid #ffaa44;border-radius:50%"></div>SH 전방향 글로우</div>
+      <div class="lrow"><div style="width:14px;height:2px;background:#ffff44"></div>Ray (전방향 360°)</div>
+      <div class="lrow"><div style="width:14px;height:2px;background:#ffc040"></div>Shadow Ray → 직접광</div>
+      <div class="lrow"><div style="width:14px;height:2px;background:#44aaff"></div>Bilinear probe 간접광</div>
+    </div>
+    <div class="panel" style="font-size:0.69em;color:#334;line-height:1.65;">
+      1프레임 = 전체 Probe 순환 1회<br>
+      프레임 0: 직접광만 SH에 저장<br>
+      프레임 1+: 직접광 + 간접광 누적<br>
+      간접광 = 주변 4개 Probe bilinear 보간<br>
+      → SurfelGI 와 달리 빈 공간에도 Probe 존재
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const LOGICAL_W = 750, LOGICAL_H = 480;
+const DPR = Math.min(window.devicePixelRatio || 1, 3);
+canvas.width  = LOGICAL_W * DPR;
+canvas.height = LOGICAL_H * DPR;
+canvas.style.width  = LOGICAL_W + 'px';
+canvas.style.height = LOGICAL_H + 'px';
+ctx.scale(DPR, DPR);
+const W = LOGICAL_W, H = LOGICAL_H;
+
+const SC = 27;
+const LT = { wx: 10, wy: 4.5, r: 1.0, g: 0.92, b: 0.78, intensity: 55 };
+
+const WALLS = [
+  { x1:1,  y1:1,  x2:27, y2:1,  nx:0,  ny:1,  col:[0.20,0.78,0.20], name:'상단 (초록)' },
+  { x1:1,  y1:1,  x2:1,  y2:17, nx:1,  ny:0,  col:[0.85,0.18,0.18], name:'좌측 (빨강)' },
+  { x1:27, y1:1,  x2:27, y2:17, nx:-1, ny:0,  col:[0.18,0.40,0.90], name:'우측 (파랑)' },
+  { x1:1,  y1:17, x2:27, y2:17, nx:0,  ny:-1, col:[0.68,0.68,0.70], name:'하단 (회색)' },
+  { x1:9,  y1:6,  x2:16, y2:6,  nx:0,  ny:-1, col:[0.95,0.50,0.10], name:'박스 상단' },
+  { x1:9,  y1:6,  x2:9,  y2:11, nx:-1, ny:0,  col:[0.95,0.50,0.10], name:'박스 좌측' },
+  { x1:16, y1:6,  x2:16, y2:11, nx:1,  ny:0,  col:[0.95,0.50,0.10], name:'박스 우측' },
+  { x1:9,  y1:11, x2:16, y2:11, nx:0,  ny:1,  col:[0.95,0.50,0.10], name:'박스 하단' },
+  { x1:3,  y1:9,  x2:7,  y2:9,  nx:0,  ny:-1, col:[0.55,0.15,0.85], name:'소박스 상단' },
+  { x1:3,  y1:9,  x2:3,  y2:14, nx:-1, ny:0,  col:[0.55,0.15,0.85], name:'소박스 좌측' },
+  { x1:7,  y1:9,  x2:7,  y2:14, nx:1,  ny:0,  col:[0.55,0.15,0.85], name:'소박스 우측' },
+  { x1:3,  y1:14, x2:7,  y2:14, nx:0,  ny:1,  col:[0.55,0.15,0.85], name:'소박스 하단' },
+];
+
+// 채워진 직사각형 박스 — ray backface 체크 및 probe 제외에 사용
+const SOLID_BOXES = [
+  { x1:9,  y1:6,  x2:16, y2:11, col:[0.95,0.50,0.10] }, // 주황 박스
+  { x1:3,  y1:9,  x2:7,  y2:14, col:[0.55,0.15,0.85] }, // 보라 박스
+];
+
+// ── utils ─────────────────────────────────────────────
+function w2s(wx, wy)  { return [wx * SC, wy * SC]; }
+function smstep(x)    { const t = Math.max(0, Math.min(1, x)); return t*t*(3-2*t); }
+function clamp01(v)   { return Math.max(0, Math.min(1, v)); }
+function rgb2css(r,g,b,a=1) {
+  const ri=Math.round(clamp01(r)*255), gi=Math.round(clamp01(g)*255), bi=Math.round(clamp01(b)*255);
+  return a<1 ? `rgba(${ri},${gi},${bi},${a.toFixed(2)})` : `rgb(${ri},${gi},${bi})`;
+}
+function magRGB(c) { return Math.sqrt(c[0]**2+c[1]**2+c[2]**2); }
+
+// ── L1 Spherical Harmonics (2D, 3 basis: Y00, Y10, Y01) ───
+// Y00=0.282095  Y10=0.488603*x  Y01=0.488603*y
+function mkSH()    { return { L00:[0,0,0], L10:[0,0,0], L01:[0,0,0] }; }
+function copySH(s) { return { L00:[...s.L00], L10:[...s.L10], L01:[...s.L01] }; }
+function magSH(s)  { return magRGB(s.L00); }
+
+// Project single sample (direction dx,dy / radiance rgb) onto SH basis
+function projectSH(dx, dy, rad) {
+  const y00=0.282095, y10=0.488603*dx, y01=0.488603*dy;
+  return {
+    L00: [rad[0]*y00, rad[1]*y00, rad[2]*y00],
+    L10: [rad[0]*y10, rad[1]*y10, rad[2]*y10],
+    L01: [rad[0]*y01, rad[1]*y01, rad[2]*y01],
+  };
+}
+
+function addSH(a, b) {
+  return {
+    L00: [a.L00[0]+b.L00[0], a.L00[1]+b.L00[1], a.L00[2]+b.L00[2]],
+    L10: [a.L10[0]+b.L10[0], a.L10[1]+b.L10[1], a.L10[2]+b.L10[2]],
+    L01: [a.L01[0]+b.L01[0], a.L01[1]+b.L01[1], a.L01[2]+b.L01[2]],
+  };
+}
+function scaleSH(s, f) {
+  return { L00:s.L00.map(v=>v*f), L10:s.L10.map(v=>v*f), L01:s.L01.map(v=>v*f) };
+}
+function lerpSH(a, b, t) {
+  const it=1-t;
+  return {
+    L00: a.L00.map((v,i)=>v*it+b.L00[i]*t),
+    L10: a.L10.map((v,i)=>v*it+b.L10[i]*t),
+    L01: a.L01.map((v,i)=>v*it+b.L01[i]*t),
+  };
+}
+// Evaluate L1 SH irradiance for surface with normal (nx,ny)
+// SH::CalculateIrradiance equivalent
+function evalSH(s, nx, ny) {
+  const c0=0.886227, c1=1.023328; // clamped-cosine zonal harmonic coefficients
+  return [
+    Math.max(0, c0*s.L00[0] + c1*(s.L10[0]*nx + s.L01[0]*ny)),
+    Math.max(0, c0*s.L00[1] + c1*(s.L10[1]*nx + s.L01[1]*ny)),
+    Math.max(0, c0*s.L00[2] + c1*(s.L10[2]*nx + s.L01[2]*ny)),
+  ];
+}
+
+function rand01(seed) {
+  let h = (seed ^ 0xdeadbeef) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// ── ray tracing ───────────────────────────────────────
+function segHit(ox,oy,dx,dy, x1,y1,x2,y2) {
+  const ex=x2-x1, ey=y2-y1, den=dx*ey-dy*ex;
+  if (Math.abs(den)<1e-8) return -1;
+  const tx=x1-ox, ty=y1-oy;
+  const t=(tx*ey-ty*ex)/den, u=(tx*dy-ty*dx)/den;
+  return (t>0.03 && u>=0 && u<=1) ? t : -1;
+}
+function traceRay(ox,oy,dx,dy) {
+  let best=Infinity, hitW=null;
+  for (const w of WALLS) {
+    const t=segHit(ox,oy,dx,dy, w.x1,w.y1,w.x2,w.y2);
+    if (t>0 && t<best) { best=t; hitW=w; }
+  }
+  return hitW ? {t:best, wx:ox+dx*best, wy:oy+dy*best, wall:hitW} : null;
+}
+function lightVisible(px,py) {
+  const ldx=LT.wx-px, ldy=LT.wy-py, ld=Math.hypot(ldx,ldy);
+  const lnx=ldx/ld, lny=ldy/ld;
+  for (const w of WALLS) {
+    const t=segHit(px,py,lnx,lny, w.x1,w.y1,w.x2,w.y2);
+    if (t>0 && t<ld-0.05) return false;
+  }
+  return true;
+}
+
+// ── probe grid ────────────────────────────────────────
+const GRID_W    = 6;
+const GRID_H    = 4;
+const GRID_STEP = 4.0;   // world units between probes
+const GRID_OX   = 3.0;
+const GRID_OY   = 3.0;
+
+function mkP(gx, gy) {
+  return { wx: GRID_OX+gx*GRID_STEP, wy: GRID_OY+gy*GRID_STEP, gx, gy, sh:mkSH(), life:0 };
+}
+function isInsideBox(wx, wy) {
+  return SOLID_BOXES.some(b => wx>=b.x1 && wx<=b.x2 && wy>=b.y1 && wy<=b.y2);
+}
+
+let probes = [];
+for (let gy=0; gy<GRID_H; gy++)
+  for (let gx=0; gx<GRID_W; gx++) {
+    const p = mkP(gx, gy);
+    p.excluded = isInsideBox(p.wx, p.wy);
+    probes.push(p);
+  }
+const PROBE_COUNT = probes.filter(p=>!p.excluded).length;
+
+// Bilinear 4-probe lookup at world position (wx, wy)
+function getBilinear(wx, wy) {
+  const gxf = (wx - GRID_OX) / GRID_STEP;
+  const gyf = (wy - GRID_OY) / GRID_STEP;
+  const gx0 = Math.floor(gxf), gy0 = Math.floor(gyf);
+  const tx = clamp01(gxf - gx0), ty = clamp01(gyf - gy0);
+  const result = [];
+  for (const [dgx, dgy] of [[0,0],[1,0],[0,1],[1,1]]) {
+    const pgx=gx0+dgx, pgy=gy0+dgy;
+    if (pgx<0||pgx>=GRID_W||pgy<0||pgy>=GRID_H) continue;
+    const probe = probes[pgy*GRID_W+pgx];
+    const w = (dgx===0 ? (1-tx) : tx) * (dgy===0 ? (1-ty) : ty);
+    if (w > 0.001) result.push({ probe, w });
+  }
+  return result;
+}
+
+// ── frame/queue state ─────────────────────────────────
+let frame = 0;
+let prevProbeSH = []; // 프레임 시작 시점 SH 스냅샷 (병렬 처리 고증)
+let probeQ = [];
+let animIdx = -1;
+let animResult = null;
+let pendingSH = null;
+let shApplied = false;
+let animStart = -1;
+let animDur = 3200;
+let renderMode = false;
+let autoTmr = null;
+
+let RAYS_PER_PROBE = 4;
+const RAY_OPTIONS = [1, 2, 4, 8];
+
+// ── precompute ────────────────────────────────────────
+function precompute(idx) {
+  const p = probes[idx];
+  const N = RAYS_PER_PROBE;
+
+  let sumDir=[0,0,0], sumInd=[0,0,0], sumSH=mkSH();
+  let allRays = [];
+
+  for (let ri=0; ri<N; ri++) {
+    // DDGI: 전방향 360° 랜덤 (SurfelGI 와 핵심 차이)
+    const ang = rand01(frame * 99991 + idx * 1009 + ri * 127) * Math.PI * 2;
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+
+    const hit = traceRay(p.wx, p.wy, dx, dy);
+    let direct=[0,0,0], indirect=[0,0,0];
+    let vis=false, rayContribs=[];
+
+    if (hit) {
+      // Backface 체크: ray 방향과 표면 노말이 같은 방향이면 뒷면 충돌 → 직접광 없음
+      const isBackface = (dx*hit.wall.nx + dy*hit.wall.ny) > 0;
+
+      if (!isBackface) {
+        vis = lightVisible(hit.wx, hit.wy);
+        if (vis) {
+          const ldx=LT.wx-hit.wx, ldy=LT.wy-hit.wy, ld=Math.hypot(ldx,ldy);
+          const lnx=ldx/ld, lny=ldy/ld;
+          const NdotL = Math.max(0, hit.wall.nx*lnx + hit.wall.ny*lny);
+          const atten  = Math.min(1, LT.intensity/(ld*ld));
+          const b = NdotL * atten;
+          direct=[hit.wall.col[0]*LT.r*b, hit.wall.col[1]*LT.g*b, hit.wall.col[2]*LT.b*b];
+        }
+      }
+
+      // 간접광: evalSH(prevSH, surface.N) — 표면 노말 방향 irradiance 평가
+      if (!isBackface && frame > 0 && prevProbeSH.length > 0) {
+        const neighbors = getBilinear(hit.wx, hit.wy);
+        let ir=0,ig=0,ib=0,wsum=0;
+        for (const nb of neighbors) {
+          if (nb.probe.life===0 || nb.probe.excluded) continue;
+          const pi = probes.indexOf(nb.probe);
+          const prevSH = prevProbeSH[pi];
+          if (!prevSH || magSH(prevSH)<0.0001) continue;
+          // 표면 노말 방향으로 SH 평가 (N 방향 적분)
+          const irr = evalSH(prevSH, hit.wall.nx, hit.wall.ny);
+          ir+=irr[0]*nb.w; ig+=irr[1]*nb.w; ib+=irr[2]*nb.w;
+          wsum+=nb.w;
+          rayContribs.push({ probe:nb.probe, w:nb.w });
+        }
+        if (wsum>0) {
+          indirect=[ir/wsum, ig/wsum, ib/wsum];
+        }
+      }
+
+      if (isBackface) direct=[0.01,0.01,0.02];
+    } else {
+      direct=[0.03,0.04,0.08];
+    }
+
+    // total radiance for this ray → project onto SH basis
+    const total_r=[direct[0]+indirect[0], direct[1]+indirect[1], direct[2]+indirect[2]];
+    allRays.push({ dx, dy, hit, vis, direct, indirect, contribs:rayContribs });
+    sumDir[0]+=direct[0]; sumDir[1]+=direct[1]; sumDir[2]+=direct[2];
+    sumInd[0]+=indirect[0]; sumInd[1]+=indirect[1]; sumInd[2]+=indirect[2];
+    // SH 누적: 각 ray 방향 + total radiance 를 SH 기저에 투영
+    sumSH = addSH(sumSH, projectSH(dx, dy, total_r));
+  }
+
+  const avgDir=[sumDir[0]/N, sumDir[1]/N, sumDir[2]/N];
+  const avgInd=[sumInd[0]/N, sumInd[1]/N, sumInd[2]/N];
+
+  // 전방향 Monte Carlo 정규화: 4π/N (full sphere)
+  const avgSH = scaleSH(sumSH, 1.0/N); // 단순 평균 (4π 제거 — 표시용 스케일 유지)
+  const alpha = 1.0 / (p.life + 1);
+  const newSH = lerpSH(p.sh, avgSH, alpha);
+
+  const firstHit = allRays.find(r=>r.hit)?.hit || null;
+  return {
+    idx, allRays, firstHit,
+    dx:allRays[0].dx, dy:allRays[0].dy, hit:firstHit,
+    direct:avgDir, indirect:avgInd, contribs:allRays[0]?.contribs||[],
+    newSH, shadowOk:allRays[0]?.vis||false
+  };
+}
+
+function applyProbe(idx, sh) {
+  probes[idx].sh = copySH(sh); probes[idx].life++;
+}
+function instantCompute(idx) { const r=precompute(idx); applyProbe(idx,r.newSH); }
+
+// ── frame control ─────────────────────────────────────
+function startNextProbe() {
+  if (probeQ.length===0) {
+    frame++;
+    prevProbeSH = probes.map(p => copySH(p.sh)); // 이전 프레임 L1 SH 스냅샷
+    probeQ=probes.reduce((acc,p,i)=>{ if(!p.excluded) acc.push(i); return acc; },[]);
+    addLog(`<span class="lf">── 프레임 ${frame} 시작 (${PROBE_COUNT}개 probe) ──</span>`);
+  }
+  animIdx=probeQ.shift();
+  animResult=precompute(animIdx);
+  pendingSH={idx:animIdx, sh:animResult.newSH};
+  shApplied=false;
+  animStart=performance.now();
+  setPhase(`Probe #${animIdx+1} 계산 중…`,'#ffcc00');
+  updateStats();
+}
+function finishCurrentFrame() {
+  for (const idx of probeQ) instantCompute(idx);
+  probeQ=[];
+  addLog(`<span class="lf">프레임 ${frame} 완료</span>`);
+  setPhase('프레임 완료','#00ff88');
+  updateStats();
+}
+
+// ── UI helpers ────────────────────────────────────────
+function setPhase(html, col='#ffaa44') {
+  const b=document.getElementById('phasebox');
+  b.innerHTML=html; b.style.borderColor=col;
+}
+function addLog(html) {
+  const el=document.getElementById('log');
+  if (el.textContent==='—') el.innerHTML='';
+  el.innerHTML+=html+'<br>';
+  el.scrollTop=el.scrollHeight;
+}
+function updateStats() {
+  document.getElementById('s-frame').textContent=frame;
+  document.getElementById('s-remain').textContent=probeQ.length||'—';
+  document.getElementById('s-active').textContent=animIdx>=0?`#${animIdx+1}`:'—';
+}
+
+// ── drawing ───────────────────────────────────────────
+function drawBg() {
+  ctx.fillStyle='#0a0a14';
+  ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(25,25,45,0.9)';
+  ctx.lineWidth=0.5;
+  for (let x=0;x<W;x+=SC) { ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for (let y=0;y<H;y+=SC) { ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+}
+
+function drawWalls(giMode) {
+  ctx.lineCap='round';
+  for (const w of WALLS) {
+    const [ax,ay]=w2s(w.x1,w.y1), [bx,by]=w2s(w.x2,w.y2);
+    if (!giMode) {
+      ctx.strokeStyle=rgb2css(w.col[0]*0.6,w.col[1]*0.6,w.col[2]*0.6);
+      ctx.lineWidth=5;
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    } else {
+      const GI_IND_AMP=5, NORM_OFF_PX=13, HALF=3;
+      const wdx=w.x2-w.x1, wdy=w.y2-w.y1, len=Math.hypot(wdx,wdy);
+      const steps=Math.ceil(len/0.3);
+      for (let i=0;i<=steps;i++) {
+        const t=i/steps, wx=w.x1+wdx*t, wy=w.y1+wdy*t;
+        let dr=0,dg=0,db=0;
+        if (lightVisible(wx,wy)) {
+          const ldx=LT.wx-wx, ldy=LT.wy-wy, ld=Math.hypot(ldx,ldy);
+          const NdotL=Math.max(0, w.nx*(ldx/ld)+w.ny*(ldy/ld));
+          const b=NdotL*Math.min(1,LT.intensity/(ld*ld));
+          dr=LT.r*b; dg=LT.g*b; db=LT.b*b;
+        }
+        const nbs=getBilinear(wx,wy);
+        let ir=0,ig=0,ib=0,wsum=0;
+        for (const nb of nbs) {
+          if (nb.probe.life===0) continue;
+          const e=evalSH(nb.probe.sh, w.nx, w.ny); ir+=e[0]*nb.w; ig+=e[1]*nb.w; ib+=e[2]*nb.w; wsum+=nb.w;
+        }
+        if (wsum>0) { ir/=wsum; ig/=wsum; ib/=wsum; }
+        const [px,py]=w2s(wx,wy);
+        ctx.fillStyle=rgb2css(w.col[0]*dr,w.col[1]*dg,w.col[2]*db);
+        ctx.fillRect(px-HALF,py-HALF,HALF*2,HALF*2);
+        const ox=px+w.nx*NORM_OFF_PX, oy=py+w.ny*NORM_OFF_PX;
+        ctx.fillStyle=rgb2css(ir*GI_IND_AMP,ig*GI_IND_AMP,ib*GI_IND_AMP);
+        ctx.fillRect(ox-HALF,oy-HALF,HALF*2,HALF*2);
+      }
+      ctx.strokeStyle=rgb2css(w.col[0]*0.25,w.col[1]*0.25,w.col[2]*0.25);
+      ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    }
+  }
+}
+
+// DDGI: full-sphere SH blob = 전방향 원형 글로우
+function tm(v) { return v / (v + 0.5); } // Reinhard 토네매핑
+
+// Probe SH: 방향별 evalSH 섹터 + blur 블렌딩
+function drawProbeBlob(probe) {
+  if (probe.life===0) return;
+  if (magSH(probe.sh)<0.0001) return;
+  const [cx,cy]=w2s(probe.wx,probe.wy);
+  const AMP=12, R=15, N=72; // 촘촘한 섹터
+
+  ctx.save();
+
+  // 섹터를 R+8 크기로 그리고 R 원으로 클립 → 경계 blur 아티팩트 방지
+  ctx.beginPath();
+  ctx.arc(cx,cy,R,0,Math.PI*2);
+  ctx.clip();
+
+  ctx.filter='blur(4px)';
+  for (let i=0; i<N; i++) {
+    const a1=(i/N)*Math.PI*2, a2=((i+1)/N)*Math.PI*2;
+    const midA=(a1+a2)/2;
+    const irr=evalSH(probe.sh, Math.cos(midA), Math.sin(midA));
+    const sr=tm(irr[0]*AMP), sg=tm(irr[1]*AMP), sb=tm(irr[2]*AMP);
+    const br=Math.min(magRGB(irr)*AMP,1);
+    if (br<0.005) continue;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy);
+    ctx.arc(cx,cy,R+8,a1,a2); // 클립보다 크게 그려 edge 아티팩트 제거
+    ctx.closePath();
+    ctx.fillStyle=rgb2css(sr,sg,sb,0.78);
+    ctx.fill();
+  }
+  ctx.filter='none';
+
+  ctx.restore(); // 클립 해제
+
+  // 바깥 글로우 (클립 밖에 별도 draw)
+  const l=probe.sh.L00;
+  const ar=tm(l[0]*AMP), ag=tm(l[1]*AMP), ab=tm(l[2]*AMP);
+  const amag=Math.min(magRGB([ar,ag,ab]),1);
+  if (amag>0.01) {
+    ctx.save();
+    const gc=ctx.createRadialGradient(cx,cy,R,cx,cy,R+12);
+    gc.addColorStop(0,rgb2css(ar,ag,ab,0.35*amag));
+    gc.addColorStop(1,rgb2css(ar,ag,ab,0));
+    ctx.beginPath();ctx.arc(cx,cy,R+12,0,Math.PI*2);
+    ctx.fillStyle=gc; ctx.fill();
+    ctx.restore();
+  }
+}
+
+// 박스 내부를 채워서 probe 가 겹치지 않게 가림
+function drawSolidBoxes() {
+  for (const b of SOLID_BOXES) {
+    const [ax,ay]=w2s(b.x1,b.y1), [bx,by]=w2s(b.x2,b.y2);
+    // 어두운 채움
+    ctx.fillStyle=rgb2css(b.col[0]*0.22, b.col[1]*0.22, b.col[2]*0.22);
+    ctx.fillRect(ax,ay,bx-ax,by-ay);
+    // 테두리
+    ctx.strokeStyle=rgb2css(b.col[0]*0.65, b.col[1]*0.65, b.col[2]*0.65);
+    ctx.lineWidth=2; ctx.strokeRect(ax,ay,bx-ax,by-ay);
+  }
+}
+
+function drawProbeGrid() {
+  // Grid lines
+  ctx.save();
+  ctx.strokeStyle='rgba(60,70,100,0.45)';
+  ctx.lineWidth=0.7; ctx.setLineDash([3,5]);
+  const x0=(GRID_OX)*SC, x1=(GRID_OX+(GRID_W-1)*GRID_STEP)*SC;
+  const y0=(GRID_OY)*SC, y1=(GRID_OY+(GRID_H-1)*GRID_STEP)*SC;
+  for (let gx=0;gx<GRID_W;gx++) {
+    const x=(GRID_OX+gx*GRID_STEP)*SC;
+    ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y1);ctx.stroke();
+  }
+  for (let gy=0;gy<GRID_H;gy++) {
+    const y=(GRID_OY+gy*GRID_STEP)*SC;
+    ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawProbes() {
+  drawProbeGrid();
+  for (let i=0;i<probes.length;i++) {
+    const p=probes[i];
+    const [cx,cy]=w2s(p.wx,p.wy);
+    const isActive=(i===animIdx);
+    if (p.excluded) continue; // 박스 내부 probe 표시 안 함
+
+    drawProbeBlob(p);
+
+    // 활성 probe 셀 하이라이트
+    if (isActive) {
+      ctx.save();
+      ctx.strokeStyle='rgba(255,200,0,0.18)';
+      ctx.lineWidth=1; ctx.setLineDash([3,3]);
+      const x0=(p.wx-GRID_STEP*0.5)*SC, y0=(p.wy-GRID_STEP*0.5)*SC;
+      ctx.strokeRect(x0,y0,GRID_STEP*SC,GRID_STEP*SC);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // Probe 원형 마커
+    // SH 없으면 회색 구체, SH 쌓이면 컬러 글로우
+    const mag = Math.min(1, magSH(p.sh) * 8); // L00 기반 밝기
+    const baseR = isActive ? 7 : 5.5;
+    ctx.save();
+    // 외곽 링 (SH 색상 반영)
+    if (p.life > 0) {
+      ctx.beginPath(); ctx.arc(cx,cy,baseR+3,0,Math.PI*2);
+      const l=p.sh.L00; ctx.strokeStyle=rgb2css(l[0]*12,l[1]*12,l[2]*12, mag*0.6);
+      ctx.lineWidth=2; ctx.stroke();
+    }
+    // 내부 원
+    ctx.beginPath(); ctx.arc(cx,cy,baseR,0,Math.PI*2);
+    if (p.life===0) {
+      ctx.fillStyle=isActive?'#ffff44':'#4a4a5a'; // 회색
+    } else {
+      // SH 색상 + 회색 기저 혼합
+      const l0=p.sh.L00; const r=0.3+l0[0]*12*0.7, g=0.3+l0[1]*12*0.7, b=0.35+l0[2]*12*0.65;
+      ctx.fillStyle=isActive?'#ffff44':rgb2css(r,g,b);
+    }
+    ctx.fill();
+    ctx.strokeStyle=isActive?'rgba(255,255,0,0.9)':'rgba(150,160,180,0.45)';
+    ctx.lineWidth=isActive?2:1; ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle='rgba(100,120,140,0.6)';
+    ctx.font='9px Consolas';
+    ctx.fillText(i+1, cx+8, cy-4);
+  }
+}
+
+function drawLight() {
+  const [lx,ly]=w2s(LT.wx,LT.wy);
+  const gc=ctx.createRadialGradient(lx,ly,0,lx,ly,40);
+  gc.addColorStop(0,rgb2css(LT.r,LT.g,LT.b,0.3));
+  gc.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gc; ctx.beginPath(); ctx.arc(lx,ly,40,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(lx,ly,6,0,Math.PI*2);
+  ctx.fillStyle=rgb2css(LT.r,LT.g,LT.b); ctx.fill();
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.fillStyle='rgba(255,240,180,0.7)'; ctx.font='bold 10px Consolas';
+  ctx.fillText('LIGHT',lx+9,ly+4);
+}
+
+// ── animation overlay ─────────────────────────────────
+function drawAnim(now) {
+  if (animIdx<0||animStart<0) return;
+  const animT=Math.min(1,(now-animStart)/animDur);
+  const p=probes[animIdx];
+  const [sx,sy]=w2s(p.wx,p.wy);
+  const res=animResult;
+  if (!res) return;
+  const rays=res.allRays||[];
+  const N=rays.length||1;
+  const [lx,ly]=w2s(LT.wx,LT.wy);
+
+  // ① Select pulse (0.00–0.09)
+  if (animT<0.10) {
+    const pp=Math.sin(animT*Math.PI*10)*0.5+0.5;
+    ctx.beginPath(); ctx.arc(sx,sy,9+pp*7,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,200,60,${0.35+0.45*pp})`; ctx.lineWidth=2; ctx.stroke();
+    setPhase(`Probe #${animIdx+1} 선택<br>위치: (${p.wx.toFixed(1)}, ${p.wy.toFixed(1)})`, '#ffcc00');
+  }
+
+  // ② N rays extend in ALL directions (0.08–0.34)
+  if (animT>0.08) {
+    const rp=clamp01((animT-0.08)/0.26);
+    ctx.save(); ctx.setLineDash([4,3]);
+    for (const ray of rays) {
+      const maxD=ray.hit?ray.hit.t:28;
+      const [epx,epy]=w2s(p.wx+ray.dx*maxD*rp, p.wy+ray.dy*maxD*rp);
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(epx,epy);
+      ctx.strokeStyle=`rgba(255,255,60,${0.55/Math.sqrt(N)})`; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    if (rp>0.7) {
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [epx,epy]=w2s(ray.hit.wx,ray.hit.wy);
+        const ang=Math.atan2(epy-sy,epx-sx);
+        ctx.beginPath();
+        ctx.moveTo(epx,epy);
+        ctx.lineTo(epx-7*Math.cos(ang-0.4),epy-7*Math.sin(ang-0.4));
+        ctx.lineTo(epx-7*Math.cos(ang+0.4),epy-7*Math.sin(ang+0.4));
+        ctx.closePath();
+        ctx.fillStyle=`rgba(255,255,60,${0.6*rp})`; ctx.fill();
+      }
+    }
+    ctx.restore();
+    if (animT<0.33) setPhase(`② Ray ×${N} — 전방향 360° 발사<br>(SurfelGI: 법선 반구 / DDGI: 전방향)`, '#ffee88');
+  }
+
+  // ③ Hit points (0.30–0.46)
+  if (animT>0.30) {
+    const hp=clamp01((animT-0.30)/0.16);
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+      ctx.beginPath(); ctx.arc(hx,hy,4+hp*4,0,Math.PI*2);
+      ctx.fillStyle=rgb2css(ray.hit.wall.col[0],ray.hit.wall.col[1],ray.hit.wall.col[2],0.75*hp);
+      ctx.fill();
+    }
+    if (animT<0.43) setPhase(`③ Hit point ×${rays.filter(r=>r.hit).length} 표면 색상`, '#ff9944');
+  }
+
+  // ④ Direct: N shadow rays (0.42–0.64)
+  if (animT>0.42) {
+    const dp=clamp01((animT-0.42)/0.22);
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+      ctx.save();
+      ctx.beginPath(); ctx.moveTo(hx,hy);
+      ctx.lineTo(hx+(lx-hx)*dp, hy+(ly-hy)*dp);
+      if (ray.vis) { ctx.strokeStyle=`rgba(255,215,70,${0.65*dp})`; ctx.lineWidth=1.5; }
+      else { ctx.strokeStyle=`rgba(255,60,60,${0.45*dp})`; ctx.lineWidth=1; ctx.setLineDash([3,3]); }
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.restore();
+    }
+    if (dp>0.55) {
+      const litCount=rays.filter(r=>r.hit&&r.vis).length;
+      const fontSize=N>2?'9px':'10px';
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+        const dc=ray.direct;
+        const label=N===1
+          ?`직접광: (${dc[0].toFixed(2)},${dc[1].toFixed(2)},${dc[2].toFixed(2)})`
+          :`(${dc[0].toFixed(1)},${dc[1].toFixed(1)},${dc[2].toFixed(1)})`;
+        ctx.fillStyle=`rgba(255,230,80,${dp})`;
+        ctx.font=`bold ${fontSize} Consolas`;
+        ctx.fillText(label, hx+6, hy-6);
+      }
+      setPhase(`④ 직접광 (Shadow Ray ×${N})<br>${litCount}/${N} hit에 광원 보임`,'#ffe060');
+      if (dp>0.85&&animIdx>=0) {
+        const p2=probes[animIdx];
+        if (!p2['_logd_'+frame]) { p2['_logd_'+frame]=true;
+          const dr=res.direct;
+          addLog(`<span class="ld">#${animIdx+1} 직접광 avg (${dr[0].toFixed(2)},${dr[1].toFixed(2)},${dr[2].toFixed(2)})</span>`);
+        }
+      }
+    }
+  }
+
+  // ⑤ Indirect — 4 Probe bilinear broadcast (0.62–0.86)
+  if (animT>0.62) {
+    const ip=clamp01((animT-0.62)/0.24);
+    const ringT=clamp01(ip/0.72);
+    const travelT=clamp01(ip/0.82);
+    const accumT=clamp01((ip-0.45)/0.55);
+    const fontSize=N>2?'9px':'10px';
+
+    if (frame===0) {
+      if (res.firstHit) {
+        const [hx,hy]=w2s(res.firstHit.wx,res.firstHit.wy);
+        ctx.fillStyle=`rgba(100,120,160,${ip*0.8})`;
+        ctx.font='10px Consolas';
+        ctx.fillText('간접광: 없음 (첫 프레임)',hx+8,hy+14);
+      }
+      if (ip>0.3) setPhase('⑤ 간접광: 없음 (첫 프레임)','#6680aa');
+    } else {
+      let totalProbeCount=0;
+
+      for (const ray of rays) {
+        if (!ray.hit) continue;
+        const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+        const contribs=ray.contribs||[];
+        totalProbeCount=Math.max(totalProbeCount,contribs.length);
+        const maxW=contribs.length?Math.max(...contribs.map(c=>c.w)):1;
+
+        for (const c of contribs) {
+          const [cx2,cy2]=w2s(c.probe.wx,c.probe.wy);
+          const wNorm=c.w/maxW;
+          const sh=c.probe.sh.L00; // L00: 평균 조도 (색상 힌트용)
+
+          // Burst ring: 0 → GRID_STEP*SC 까지 (probe 간격만큼)
+          const burstR=ringT*GRID_STEP*SC*0.6;
+          const burstAlpha=(1-ringT)*(0.45+0.55*wNorm);
+          if (burstAlpha>0.01) {
+            ctx.save();
+            ctx.beginPath(); ctx.arc(cx2,cy2,burstR,0,Math.PI*2);
+            ctx.strokeStyle=rgb2css(sh[0],sh[1],sh[2],burstAlpha);
+            ctx.lineWidth=1.5+wNorm*2; ctx.stroke();
+            ctx.restore();
+          }
+
+          // Probe core glow (diamond highlight)
+          ctx.save();
+          ctx.beginPath(); ctx.arc(cx2,cy2,8+wNorm*5,0,Math.PI*2);
+          ctx.strokeStyle=rgb2css(sh[0],sh[1],sh[2],Math.min(ip*3,1)*0.8);
+          ctx.lineWidth=1.5; ctx.stroke();
+          ctx.restore();
+
+          // Traveling beam: probe → hit point
+          const tipX=cx2+(hx-cx2)*travelT, tipY=cy2+(hy-cy2)*travelT;
+          ctx.save();
+          ctx.beginPath(); ctx.moveTo(cx2,cy2); ctx.lineTo(tipX,tipY);
+          ctx.strokeStyle=rgb2css(sh[0],sh[1],sh[2],0.65*(0.3+0.7*wNorm));
+          ctx.lineWidth=1.5+wNorm*2.5; ctx.stroke();
+          ctx.restore();
+          const tipSz=3.5+wNorm*3.5;
+          const gc2=ctx.createRadialGradient(tipX,tipY,0,tipX,tipY,tipSz*2);
+          gc2.addColorStop(0,rgb2css(sh[0],sh[1],sh[2],0.95));
+          gc2.addColorStop(1,rgb2css(sh[0],sh[1],sh[2],0));
+          ctx.fillStyle=gc2;
+          ctx.beginPath(); ctx.arc(tipX,tipY,tipSz*2,0,Math.PI*2); ctx.fill();
+
+          // Bilinear weight label
+          if (ip>0.4&&wNorm>0.3) {
+            ctx.fillStyle=`rgba(200,200,255,${Math.min(ip*2,1)*0.6})`;
+            ctx.font='8px Consolas';
+            ctx.fillText(`w=${c.w.toFixed(2)}`, cx2+8, cy2-8);
+          }
+        }
+
+        // Accumulated glow at hit point (×5)
+        if (ip>0.45) {
+          const AMP=5;
+          const [ir2,ig2,ib2]=ray.indirect;
+          const r2=ir2*AMP, g2=ig2*AMP, b2=ib2*AMP;
+          const glowR=10+accumT*14;
+          const gc=ctx.createRadialGradient(hx,hy,0,hx,hy,glowR);
+          gc.addColorStop(0,rgb2css(r2,g2,b2,0.88*accumT));
+          gc.addColorStop(0.5,rgb2css(r2,g2,b2,0.45*accumT));
+          gc.addColorStop(1,'rgba(0,0,0,0)');
+          ctx.beginPath(); ctx.arc(hx,hy,glowR,0,Math.PI*2);
+          ctx.fillStyle=gc; ctx.fill();
+          if (accumT>0.55) {
+            ctx.fillStyle=`rgba(80,200,255,${accumT*0.85})`;
+            ctx.font=`bold ${fontSize} Consolas`;
+            const label=N===1
+              ?`간접광: (${ir2.toFixed(2)},${ig2.toFixed(2)},${ib2.toFixed(2)})`
+              :`(${ir2.toFixed(1)},${ig2.toFixed(1)},${ib2.toFixed(1)})`;
+            ctx.fillText(label, hx+7, hy+15);
+          }
+        }
+      }
+
+      if (ip>0.7&&animIdx>=0) {
+        const p3=probes[animIdx];
+        if (!p3['_logi_'+frame]) { p3['_logi_'+frame]=true;
+          const ind=res.indirect;
+          addLog(`<span class="li">#${animIdx+1} 간접광 avg (${ind[0].toFixed(2)},${ind[1].toFixed(2)},${ind[2].toFixed(2)}) ← bilinear ${totalProbeCount}개 probe</span>`);
+        }
+      }
+      setPhase(`⑤ 간접광: 4개 Probe bilinear 보간<br>각 Probe가 SH 파동 → hit point 누적`,'#44ccff');
+    }
+  }
+
+  // ⑥ Accumulate (0.83–1.00)
+  if (animT>0.83) {
+    const ap=clamp01((animT-0.83)/0.17);
+    const total=[res.direct[0]+res.indirect[0], res.direct[1]+res.indirect[1], res.direct[2]+res.indirect[2]];
+    for (const ray of rays) {
+      if (!ray.hit) continue;
+      const [hx,hy]=w2s(ray.hit.wx,ray.hit.wy);
+      const bx=hx+(sx-hx)*ap, by=hy+(sy-hy)*ap;
+      ctx.save();
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(bx,by);
+      ctx.strokeStyle=rgb2css(total[0],total[1],total[2],0.7);
+      ctx.lineWidth=2; ctx.stroke();
+      ctx.restore();
+    }
+    if (ap>0.45&&!shApplied) {
+      shApplied=true;
+      applyProbe(pendingSH.idx,pendingSH.sh);
+      const sh=pendingSH.sh;
+      const l=sh.L00;
+      addLog(`<span class="la">#${animIdx+1} SH L00 ← (${l[0].toFixed(2)},${l[1].toFixed(2)},${l[2].toFixed(2)})</span>`);
+    }
+    const sg=clamp01((ap-0.45)/0.55);
+    ctx.beginPath(); ctx.arc(sx,sy,9+sg*10,0,Math.PI*2);
+    ctx.strokeStyle=rgb2css(total[0],total[1],total[2],sg*0.9);
+    ctx.lineWidth=2.5; ctx.stroke();
+    setPhase(`⑥ 평균 radiance → SH 누적<br>life=${p.life}, running avg`,'#00ee66');
+  }
+
+  if (animT>=1.0) {
+    if (!shApplied) { shApplied=true; applyProbe(pendingSH.idx,pendingSH.sh); }
+    animIdx=-1; animStart=-1; animResult=null;
+    setPhase('단계 완료 ✓','#00ee66');
+    updateStats();
+  }
+}
+
+// GI 렌더링 범례
+function drawGILegend() {
+  if (!renderMode) return;
+  const x=8, y=H-38;
+  ctx.save();
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(x-4,y-14,230,36);
+  ctx.font='10px Consolas';
+  ctx.fillStyle='#aaffaa'; ctx.fillRect(x,y-4,14,6);
+  ctx.fillStyle='#aaa'; ctx.fillText('직접광  (알베도 × 광원)',x+18,y+3);
+  ctx.fillStyle='#88aaff'; ctx.fillRect(x,y+10,14,6);
+  ctx.fillStyle='#aaa'; ctx.fillText('간접광 ×5  (bilinear probe 보간, 13px 오프셋)',x+18,y+17);
+  ctx.restore();
+}
+
+// ── render loop ───────────────────────────────────────
+function render(now) {
+  drawBg(); drawLight(); drawWalls(renderMode);
+  drawSolidBoxes(); // 박스 채움 — probe 및 내부 요소 가림
+  drawProbes(); drawAnim(now); drawGILegend();
+  requestAnimationFrame(render);
+}
+
+// ── controls ──────────────────────────────────────────
+function stepOne() { if (animIdx>=0) return; startNextProbe(); }
+
+document.getElementById('btn-step').addEventListener('click', stepOne);
+
+document.getElementById('btn-frame').addEventListener('click', () => {
+  if (animIdx>=0) {
+    if (!shApplied) { shApplied=true; applyProbe(pendingSH.idx,pendingSH.sh); }
+    animIdx=-1; animStart=-1; animResult=null;
+  }
+  if (probeQ.length===0) {
+    frame++;
+    prevProbeSH = probes.map(p => copySH(p.sh));
+    probeQ=probes.reduce((acc,p,i)=>{ if(!p.excluded) acc.push(i); return acc; },[]);
+    addLog(`<span class="lf">── 프레임 ${frame} 시작 ──</span>`);
+  }
+  finishCurrentFrame();
+});
+
+document.getElementById('btn-render').addEventListener('click', () => {
+  renderMode=!renderMode;
+  document.getElementById('btn-render').textContent=renderMode?'GI 렌더링 ON':'GI 렌더링 OFF';
+  document.getElementById('btn-render').classList.toggle('active',renderMode);
+});
+
+const SPEED_MAP=[0.33,0.5,1,1.5,2,3,5,8];
+document.getElementById('speed-slider').addEventListener('input', function() {
+  const speed=SPEED_MAP[parseInt(this.value)-1];
+  animDur=Math.round(3200/speed);
+  document.getElementById('speed-label').textContent=speed+'×';
+});
+
+document.getElementById('btn-rays').addEventListener('click', () => {
+  const cur=RAY_OPTIONS.indexOf(RAYS_PER_PROBE);
+  RAYS_PER_PROBE=RAY_OPTIONS[(cur+1)%RAY_OPTIONS.length];
+  document.getElementById('btn-rays').textContent=`Ray 수: ${RAYS_PER_PROBE}`;
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  frame=0; probeQ=[]; animIdx=-1; animStart=-1; animResult=null; shApplied=false;
+  probes.forEach(p=>{p.sh=mkSH();p.life=0;});
+  probes.forEach(p=>{for(const k of Object.keys(p))if(k.startsWith('_'))delete p[k];});
+  // excluded 상태 재계산 (초기화 후에도 박스 내부 probe는 제외 유지)
+  probes.forEach(p=>{ p.excluded=isInsideBox(p.wx,p.wy); });
+  document.getElementById('log').innerHTML='—';
+  setPhase('초기화 완료','#ffaa44');
+  updateStats();
+});
+
+// ── init ──────────────────────────────────────────────
+updateStats();
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

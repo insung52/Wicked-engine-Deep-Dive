@@ -146,6 +146,45 @@ function rgb2css(r,g,b,a=1) {
 }
 function magRGB(c) { return Math.sqrt(c[0]**2+c[1]**2+c[2]**2); }
 
+// ── L1 Spherical Harmonics (2D) ───────────────────────
+function mkSH()    { return { L00:[0,0,0], L10:[0,0,0], L01:[0,0,0] }; }
+function copySH(s) { return { L00:[...s.L00], L10:[...s.L10], L01:[...s.L01] }; }
+function magSH(s)  { return magRGB(s.L00); }
+function projectSH(dx, dy, rad) {
+  const y00=0.282095, y10=0.488603*dx, y01=0.488603*dy;
+  return {
+    L00:[rad[0]*y00,rad[1]*y00,rad[2]*y00],
+    L10:[rad[0]*y10,rad[1]*y10,rad[2]*y10],
+    L01:[rad[0]*y01,rad[1]*y01,rad[2]*y01],
+  };
+}
+function addSH(a,b) {
+  return {
+    L00:[a.L00[0]+b.L00[0],a.L00[1]+b.L00[1],a.L00[2]+b.L00[2]],
+    L10:[a.L10[0]+b.L10[0],a.L10[1]+b.L10[1],a.L10[2]+b.L10[2]],
+    L01:[a.L01[0]+b.L01[0],a.L01[1]+b.L01[1],a.L01[2]+b.L01[2]],
+  };
+}
+function scaleSH(s,f) {
+  return { L00:s.L00.map(v=>v*f), L10:s.L10.map(v=>v*f), L01:s.L01.map(v=>v*f) };
+}
+function lerpSH(a,b,t) {
+  const it=1-t;
+  return {
+    L00:a.L00.map((v,i)=>v*it+b.L00[i]*t),
+    L10:a.L10.map((v,i)=>v*it+b.L10[i]*t),
+    L01:a.L01.map((v,i)=>v*it+b.L01[i]*t),
+  };
+}
+function evalSH(s,nx,ny) {
+  const c0=0.886227, c1=1.023328;
+  return [
+    Math.max(0, c0*s.L00[0]+c1*(s.L10[0]*nx+s.L01[0]*ny)),
+    Math.max(0, c0*s.L00[1]+c1*(s.L10[1]*nx+s.L01[1]*ny)),
+    Math.max(0, c0*s.L00[2]+c1*(s.L10[2]*nx+s.L01[2]*ny)),
+  ];
+}
+
 // ── pseudo-random: per-frame per-surfel per-ray seed ──
 function rand01(seed) {
   let h = (seed ^ 0xdeadbeef) >>> 0;
@@ -186,7 +225,7 @@ function lightVisible(px,py) {
 }
 
 // ── surfels ───────────────────────────────────────────
-function mkS(wx,wy,nx,ny,wi) { return {wx,wy,nx,ny,wi, sh:[0,0,0], life:0}; }
+function mkS(wx,wy,nx,ny,wi) { return {wx,wy,nx,ny,wi, sh:mkSH(), life:0}; }
 
 let surfels = [
   // top wall n=(0,+1)  — 9개
@@ -218,6 +257,7 @@ const SURFEL_COUNT = surfels.length;
 
 // ── frame / queue state ───────────────────────────────
 let frame = 0;
+let prevSurfelSH = []; // 프레임 시작 시점 SH 스냅샷 (병렬 처리 고증)
 let surfelQ = [];       // indices remaining this frame
 let animIdx = -1;       // which surfel is animating
 let animResult = null;  // pre-computed data for current animation
@@ -235,7 +275,7 @@ function precompute(idx) {
   const baseAng = Math.atan2(s.ny, s.nx);
   const N = RAYS_PER_SURFEL;
 
-  let sumDir=[0,0,0], sumInd=[0,0,0];
+  let sumDir=[0,0,0], sumInd=[0,0,0], sumSH=mkSH();
   let allRays   = [];   // all ray data for animation
   for (let ri=0; ri<N; ri++) {
     const rnd = rand01(frame * 99991 + idx * 1009 + ri * 127);
@@ -258,44 +298,48 @@ function precompute(idx) {
         const b = NdotL * atten;
         direct = [hit.wall.col[0]*LT.r*b, hit.wall.col[1]*LT.g*b, hit.wall.col[2]*LT.b*b];
       }
-      if (frame > 0) {
+      // 간접광: evalSH(prevSH, surface.N) — 표면 노말 방향 irradiance 평가
+      if (frame > 0 && prevSurfelSH.length > 0) {
         let ir=0,ig=0,ib=0,tot=0;
         for (let i=0; i<surfels.length; i++) {
           if (i===idx) continue;
           const ns=surfels[i];
           if (ns.life===0) continue;
+          const prevSH=prevSurfelSH[i];
+          if (!prevSH || magSH(prevSH)<0.0001) continue;
           const d=Math.hypot(hit.wx-ns.wx, hit.wy-ns.wy);
           if (d<SR) {
             const dotN=Math.max(0, hit.wall.nx*ns.nx+hit.wall.ny*ns.ny);
             const w2=smstep(dotN)*smstep(1-d/SR);
             if (w2>0.005) {
-              ir+=ns.sh[0]*w2; ig+=ns.sh[1]*w2; ib+=ns.sh[2]*w2; tot+=w2;
+              // N 방향으로 SH 평가
+              const irr=evalSH(prevSH, hit.wall.nx, hit.wall.ny);
+              ir+=irr[0]*w2; ig+=irr[1]*w2; ib+=irr[2]*w2; tot+=w2;
               rayContribs.push({s:ns, w:w2});
             }
           }
         }
-        if (tot>0) indirect=[ir/tot/Math.PI, ig/tot/Math.PI, ib/tot/Math.PI];
+        if (tot>0) indirect=[ir/tot, ig/tot, ib/tot];
       }
     } else {
       direct=[0.03,0.04,0.08];
     }
 
-    // 모든 ray에 direct, indirect, contribs 저장
+    const total_r=[direct[0]+indirect[0], direct[1]+indirect[1], direct[2]+indirect[2]];
     allRays.push({ dx, dy, hit, vis, direct, indirect, contribs: rayContribs });
     sumDir[0]+=direct[0];  sumDir[1]+=direct[1];  sumDir[2]+=direct[2];
     sumInd[0]+=indirect[0];sumInd[1]+=indirect[1];sumInd[2]+=indirect[2];
+    // SH 누적: 법선 반구 Monte Carlo (2π 정규화)
+    sumSH = addSH(sumSH, projectSH(dx, dy, total_r));
   }
 
   const avgDir=[sumDir[0]/N, sumDir[1]/N, sumDir[2]/N];
   const avgInd=[sumInd[0]/N, sumInd[1]/N, sumInd[2]/N];
-  const total=[avgDir[0]+avgInd[0], avgDir[1]+avgInd[1], avgDir[2]+avgInd[2]];
 
+  // 반구 Monte Carlo 정규화: 2π/N
+  const avgSH = scaleSH(sumSH, 1.0/N);
   const alpha = 1.0 / (s.life + 1);
-  const newSH=[
-    s.sh[0]*(1-alpha)+total[0]*alpha,
-    s.sh[1]*(1-alpha)+total[1]*alpha,
-    s.sh[2]*(1-alpha)+total[2]*alpha,
-  ];
+  const newSH = lerpSH(s.sh, avgSH, alpha);
 
   const firstHit = allRays.find(r=>r.hit)?.hit || null;
 
@@ -308,7 +352,7 @@ function precompute(idx) {
 }
 
 function applySH(idx, sh) {
-  surfels[idx].sh = [...sh];
+  surfels[idx].sh = copySH(sh);
   surfels[idx].life++;
 }
 
@@ -322,6 +366,7 @@ function instantCompute(idx) {
 function startNextSurfel() {
   if (surfelQ.length === 0) {
     frame++;
+    prevSurfelSH = surfels.map(s => copySH(s.sh)); // 이전 프레임 L1 SH 스냅샷
     surfelQ = Array.from({length:SURFEL_COUNT},(_,i)=>i);
     addLog(`<span class="lf">── 프레임 ${frame} 시작 (${SURFEL_COUNT}개 surfel) ──</span>`);
   }
@@ -413,10 +458,10 @@ function drawWalls(giMode) {
           if (d<SR) {
             const dotN=Math.max(0, w.nx*s.nx+w.ny*s.ny);
             const wt=smstep(dotN)*smstep(1-d/SR);
-            if (wt>0.005) { ir+=s.sh[0]*wt; ig+=s.sh[1]*wt; ib+=s.sh[2]*wt; tot+=wt; }
+            if (wt>0.005) { const e=evalSH(s.sh,w.nx,w.ny); ir+=e[0]*wt; ig+=e[1]*wt; ib+=e[2]*wt; tot+=wt; }
           }
         }
-        if (tot>0) { ir/=tot*Math.PI; ig/=tot*Math.PI; ib/=tot*Math.PI; }
+        if (tot>0) { ir/=tot; ig/=tot; ib/=tot; }
 
         const [px,py] = w2s(wx,wy);
 
@@ -442,44 +487,61 @@ function drawWalls(giMode) {
 
 // SH lobe: L1 SH 코사인 로브 형태 — r(θ) = R × max(0, cos(θ - normalAngle))
 // 법선 방향이 가장 밝고 ±90° 에서 0 으로 감소 (clamped cosine 분포)
+// SurfelGI SH 블롭: 반구(법선 기준 ±90°) 섹터 + blur 블렌딩
+// Reinhard 토네매핑: hard clip 대신 부드럽게 압축 → 흰색 방지
+function tm(v) { return v / (v + 0.5); }
+
 function drawSHBlob(s, alpha=1) {
   if (s.life===0) return;
-  const mag = Math.min(1.8, magRGB(s.sh));
-  if (mag < 0.005) return;
+  if (magSH(s.sh) < 0.0001) return;
   const [cx,cy] = w2s(s.wx, s.wy);
   const baseAng = Math.atan2(s.ny, s.nx);
-  const maxR = (14 + mag * 16) * Math.min(1, alpha);
+  const AMP=12, R=14, N=36; // 반구 36섹터 (5° 단위)
 
-  // Trace the cosine lobe curve: sample angles in full hemisphere, r = maxR * cos(θ - base)
-  const STEPS = 36;
   ctx.save();
+
+  // 반구 영역으로 클립
   ctx.beginPath();
-  let first = true;
-  for (let i = 0; i <= STEPS; i++) {
-    const ang = baseAng - Math.PI/2 + (i / STEPS) * Math.PI;
-    const cosVal = Math.max(0, Math.cos(ang - baseAng));
-    const r = maxR * cosVal;
-    const px = cx + Math.cos(ang) * r;
-    const py = cy + Math.sin(ang) * r;
-    if (first) { ctx.moveTo(px, py); first = false; }
-    else        { ctx.lineTo(px, py); }
-  }
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, R, baseAng - Math.PI/2, baseAng + Math.PI/2);
   ctx.closePath();
+  ctx.clip();
 
-  // Fill: linear gradient along normal direction (brighter at tip)
-  const tipX = cx + Math.cos(baseAng) * maxR;
-  const tipY = cy + Math.sin(baseAng) * maxR;
-  const gc = ctx.createLinearGradient(cx, cy, tipX, tipY);
-  gc.addColorStop(0, rgb2css(s.sh[0], s.sh[1], s.sh[2], 0.08 * alpha));
-  gc.addColorStop(1, rgb2css(s.sh[0], s.sh[1], s.sh[2], 0.75 * alpha * Math.min(1, mag)));
-  ctx.fillStyle = gc;
-  ctx.fill();
-
-  // Thin outline for clarity
-  ctx.strokeStyle = rgb2css(s.sh[0], s.sh[1], s.sh[2], 0.35 * alpha);
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
+  ctx.filter = 'blur(4px)';
+  for (let i=0; i<N; i++) {
+    const t = i/N;
+    const ang = baseAng - Math.PI/2 + t*Math.PI;
+    const a1  = baseAng - Math.PI/2 + t*Math.PI;
+    const a2  = baseAng - Math.PI/2 + (t + 1/N)*Math.PI;
+    const midA = (a1+a2)/2;
+    const nx2=Math.cos(midA), ny2=Math.sin(midA);
+    const irr = evalSH(s.sh, nx2, ny2);
+    const sr=tm(irr[0]*AMP), sg=tm(irr[1]*AMP), sb=tm(irr[2]*AMP);
+    const br = Math.min(magRGB(irr)*AMP, 1);
+    if (br < 0.005) continue;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, R+8, a1, a2); // 클립보다 크게
+    ctx.closePath();
+    ctx.fillStyle = rgb2css(sr, sg, sb, 0.78 * alpha);
+    ctx.fill();
+  }
+  ctx.filter = 'none';
   ctx.restore();
+
+  // 바깥 글로우
+  const l00 = s.sh.L00;
+  const ar=tm(l00[0]*AMP), ag=tm(l00[1]*AMP), ab=tm(l00[2]*AMP);
+  const amag = Math.min(magRGB([ar,ag,ab]),1);
+  if (amag > 0.01) {
+    ctx.save();
+    const gc = ctx.createRadialGradient(cx,cy,R,cx,cy,R+10);
+    gc.addColorStop(0, rgb2css(ar,ag,ab, 0.32*amag*alpha));
+    gc.addColorStop(1, rgb2css(ar,ag,ab, 0));
+    ctx.beginPath(); ctx.arc(cx,cy,R+10,0,Math.PI*2);
+    ctx.fillStyle=gc; ctx.fill();
+    ctx.restore();
+  }
 }
 
 function drawSurfels(giMode) {
@@ -501,7 +563,7 @@ function drawSurfels(giMode) {
     // Dot
     ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2);
     ctx.fillStyle = isActive ? '#ffff44' :
-                    s.life>0  ? rgb2css(0.3+s.sh[0]*0.7, 0.4+s.sh[1]*0.5, 0.5+s.sh[2]*0.5)
+                    s.life>0  ? (()=>{ const l=s.sh.L00; return rgb2css(0.3+l[0]*12*0.7, 0.35+l[1]*12*0.55, 0.4+l[2]*12*0.55); })()
                                : '#2a3040';
     ctx.fill();
     if (isActive) {
@@ -677,7 +739,7 @@ function drawAnim(now) {
           if (burstAlpha > 0.01) {
             ctx.save();
             ctx.beginPath(); ctx.arc(cx2,cy2, burstR, 0, Math.PI*2);
-            ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], burstAlpha);
+            ctx.strokeStyle=rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12, burstAlpha);
             ctx.lineWidth=1.5+wNorm*2; ctx.stroke();
             ctx.restore();
           }
@@ -685,10 +747,10 @@ function drawAnim(now) {
           // ② Surfel core glow
           ctx.save();
           ctx.beginPath(); ctx.arc(cx2,cy2, 6+wNorm*4, 0, Math.PI*2);
-          ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], Math.min(ip*3,1)*0.8);
+          ctx.strokeStyle=rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12, Math.min(ip*3,1)*0.8);
           ctx.lineWidth=1.5; ctx.stroke();
           ctx.beginPath(); ctx.arc(cx2,cy2, 3.5, 0, Math.PI*2);
-          ctx.fillStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], Math.min(ip*4,1)*0.55);
+          ctx.fillStyle=rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12, Math.min(ip*4,1)*0.55);
           ctx.fill();
           ctx.restore();
 
@@ -697,14 +759,14 @@ function drawAnim(now) {
           const tipY = cy2 + (hy-cy2)*travelT;
           ctx.save();
           ctx.beginPath(); ctx.moveTo(cx2,cy2); ctx.lineTo(tipX,tipY);
-          ctx.strokeStyle=rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2], 0.6*(0.3+0.7*wNorm));
+          ctx.strokeStyle=rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12, 0.6*(0.3+0.7*wNorm));
           ctx.lineWidth=1.5+wNorm*2; ctx.stroke();
           ctx.restore();
           // glowing tip
           const tipSz = 3.5 + wNorm*3.5;
           const gc2=ctx.createRadialGradient(tipX,tipY,0,tipX,tipY,tipSz*2);
-          gc2.addColorStop(0,rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],0.95));
-          gc2.addColorStop(1,rgb2css(c.s.sh[0],c.s.sh[1],c.s.sh[2],0));
+          gc2.addColorStop(0,rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12,0.95));
+          gc2.addColorStop(1,rgb2css(c.s.sh.L00[0]*12,c.s.sh.L00[1]*12,c.s.sh.L00[2]*12,0));
           ctx.fillStyle=gc2;
           ctx.beginPath(); ctx.arc(tipX,tipY,tipSz*2,0,Math.PI*2); ctx.fill();
         }
@@ -766,7 +828,8 @@ function drawAnim(now) {
       shApplied=true;
       applySH(pendingSH.idx, pendingSH.sh);
       const sh=pendingSH.sh;
-      addLog(`<span class="la">#${animIdx+1} SH ← (${sh[0].toFixed(2)},${sh[1].toFixed(2)},${sh[2].toFixed(2)})</span>`);
+      const l=sh.L00;
+      addLog(`<span class="la">#${animIdx+1} SH L00 ← (${l[0].toFixed(2)},${l[1].toFixed(2)},${l[2].toFixed(2)})</span>`);
     }
 
     const sg=clamp01((ap-0.45)/0.55);
@@ -840,6 +903,7 @@ document.getElementById('btn-frame').addEventListener('click', () => {
   // 큐가 비어있으면 (프레임 완료 상태) 항상 다음 프레임 시작
   if (surfelQ.length===0) {
     frame++;
+    prevSurfelSH = surfels.map(s => copySH(s.sh));
     surfelQ=Array.from({length:SURFEL_COUNT},(_,i)=>i);
     addLog(`<span class="lf">── 프레임 ${frame} 시작 ──</span>`);
   }
@@ -869,7 +933,7 @@ document.getElementById('btn-render').addEventListener('click', () => {
 document.getElementById('btn-reset').addEventListener('click', () => {
   autoRunning=false; clearTimeout(autoTmr);
   frame=0; surfelQ=[]; animIdx=-1; animStart=-1; animResult=null; shApplied=false;
-  surfels.forEach(s => { s.sh=[0,0,0]; s.life=0; });
+  surfels.forEach(s => { s.sh=mkSH(); s.life=0; });
   // clear logged flags
   surfels.forEach(s => { for (const k of Object.keys(s)) if (k.startsWith('_')) delete s[k]; });
   document.getElementById('log').innerHTML='—';

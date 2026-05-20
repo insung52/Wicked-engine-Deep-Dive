@@ -196,7 +196,14 @@ button.warn-btn:hover { background: #2a1500; color: #ffaa44; }
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
+const LOGICAL_W = canvas.width, LOGICAL_H = canvas.height;
+const DPR = Math.min(window.devicePixelRatio || 1, 3);
+canvas.width  = LOGICAL_W * DPR;
+canvas.height = LOGICAL_H * DPR;
+canvas.style.width  = LOGICAL_W + 'px';
+canvas.style.height = LOGICAL_H + 'px';
+ctx.scale(DPR, DPR);
+const W = LOGICAL_W, H = LOGICAL_H;
 
 // ── world config ──────────────────────────────────────
 const SCALE = 28;          // px per world unit
