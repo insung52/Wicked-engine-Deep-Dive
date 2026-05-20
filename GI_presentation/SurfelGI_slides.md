@@ -242,6 +242,90 @@ SURFEL_RAY_BOOST_MAX = 64 ray / surfel (최대)
 
 ---
 
+공통
+L1 SH 를 사용 - (대충 빠른 샘플링이나 그런 장점 + specular 안되는 단점)
+동적으로 실시간 라이팅 계산 가능
+ddgi probe 해상도 처럼, surfel 반경보다 작은 세부 구조에서 GI 정확도 저하 및 light leaking
+
+차이
+probe vs surfel : 메시가 있는 부분만 간접광 계산 및 저장 하므로 더 효율적
+surfel 스폰/소멸 관리가 복잡함
+
+- surfel GI 작동 과정 설명 슬라이드
+
+표면 노멀 기준 반구(hemisphere) 방향 중 랜덤하게 ray 발사
+표면 N 기준 반구 내 랜덤 방향으로 ray 발사 (N 에 가까울수록 높은 확률)
+
+해당 위치에서의 직접광, 간접광 계산
+직접광 : DDGI 와 동일하게, 조명 방향에 장애물이 없으면 빛 계산 및 저장
+간접광 :DDGI 와 유사하게, 반경 2 내의 주변 surfel 들의 SH 를 weighted blending 및 N 방향으로 적분해서 간접광을 계산 및 저장
+
+- ddgi, surfelGI 비교 슬라이드
+
+표
+ddgi, surfelGI
+L1 SH(구 전체) | L1 SH(반구)
+동적 실시간 라이팅 가능
+probe 해상도보다 작은 세부 구조에서 GI 정확도 저하 및 light leaking | surfel 반경보다 ~~
+probe : 씬 전체 공간에 grid 고정 | 메시가 있는 부분만 간접광 계산, 더 효율적
+(여기 뭐 들어갈거 있나?)    | surfel 스폰/소멸 관리 복잡
+
+---
+
+SurfelGI 작동 과정 슬라이드
+
+Ray firing
+- Fires rays from the surfel position into the hemisphere aligned to surface normal N
+- Cosine-weighted hemisphere sampling — directions closer to N are sampled with higher probability (importance sampling for Lambertian
+diffuse)
+
+Direct lighting (same as DDGI)
+- Randomly sample one light source, cast shadow ray toward it
+- If not occluded: compute reflected radiance at the hit surface
+
+Indirect lighting (infinite bounces)
+- At each ray hit point, query nearby surfels within radius 2 via hash grid
+- For each qualifying surfel: evaluate its L1 SH against the hit surface normal N → irradiance
+- Weight by: normal alignment × distance falloff × moment-based visibility (Chebyshev)
+- Weighted average of irradiance contributions → indirect diffuse radiance
+
+Integrate & store
+- Accumulate ray results into a 4×4 texel grid (hemisphere-aligned to N)
+- Temporal blending via MultiscaleMeanEstimator
+- Project 4×4 texels → L1 SH → store in surfel.radiance
+
+---
+DDGI vs SurfelGI 비교 슬라이드
+
+┌─────────────────────┬─────────────────────────────────────────────────┬───────────────────────────────────────────────────────────┐
+│                     │                      DDGI                       │                         SurfelGI                          │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Radiance storage    │ L1 SH over full sphere                          │ L1 SH over hemisphere                                     │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Ray sampling        │ Spherical Fibonacci over full sphere + random   │ Cosine-weighted hemisphere aligned to surface N           │
+│                     │ rotation                                        │                                                           │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Cache placement     │ Fixed 3D grid — exists even in empty space      │ Surface-attached — only where geometry exists             │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ World coverage      │ Grid-bounded                                    │ Unlimited (spatial hashing)                               │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Dynamic object      │ Indirect (probe data updated next frame)        │ Explicit — surfel follows surface via primitiveID +       │
+│ tracking            │                                                 │ barycentric                                               │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Ray budget          │ Per-probe, scaled by inconsistency              │ Shared pool (500K rays/frame), per-surfel scaled by       │
+│                     │                                                 │ inconsistency                                             │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Indirect lookup     │ Blend 8 probe SHs (trilinear) → evaluate once   │ Evaluate each surfel SH with N individually → weighted    │
+│                     │ with N                                          │ sum                                                       │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ GI accuracy limit   │ Probe grid spacing — fine structures may leak   │ Surfel radius (2 world units) — sub-radius details may    │
+│                     │ or be inaccurate                                │ leak or be inaccurate                                     │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Cache management    │ Simple — fixed grid, no lifecycle               │ Complex — spawn / accumulate / recycle lifecycle          │
+├─────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Specular            │ ❌                                              │ ❌                                                        │
+└─────────────────────┴─────────────────────────────────────────────────┴───────────────────────────────────────────────────────────┘
+
 ## Slide 13 — 세 기법 최종 비교
 
 | | DDGI | SurfelGI | VoxelGI |
