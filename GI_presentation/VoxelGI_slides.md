@@ -1,16 +1,65 @@
 # VoxelGI 슬라이드 구성
-> VizMotive Engine GI Series - Part 2 / Voxel-based Global Illumination
+> VizMotive Engine GI Series - Part 3 / Voxel-based Global Illumination
 
 ---
 
 ## Slide 1 — 표지
 - **제목**: Voxel-based Global Illumination (VoxelGI)
-- **부제**: VizMotive Engine GI 시리즈 2편
+- **부제**: VizMotive Engine GI 시리즈 3편
 - 배경: 엔진 실행 스크린샷 (VoxelGI 켜진 씬)
 
 ---
 
-## Slide 2 — Voxel이란?
+![alt text](image-7.png)
+
+![alt text](imgaa.png)
+
+![alt text](image-8.png)
+
+![alt text](image-9.png)
+
+
+## Slide 2 — 이전 기법들의 한계
+
+**DDGI (probe 기반)**
+
+| 딜레마 | 내용 |
+|---|---|
+| Probe 간격 ↑ | 커버리지는 넓어지나 GI 해상도 저하 |
+| Probe 간격 ↓ | 해상도 향상되나 메모리·연산 비용 급증 |
+
+- SH는 저주파 표현만 가능 → **Specular GI 불가능**
+
+**SurfelGI (표면 부착 기반)**
+
+| 딜레마 | 내용 |
+|---|---|
+| Surfel 반경 ↑ | 커버리지 넓어지나 탐색 비용 증가, 누화 발생 |
+| Surfel 반경 ↓ | 정확도 향상되나 빈 공간 생김 |
+
+- 마찬가지로 SH 기반 → **Specular GI 불가능**
+- Frustum 밖 영역은 갱신 불가
+
+> **공통 한계**: 두 기법 모두 SH의 저주파 특성으로 인해 거울 반사·광택 표면의 Specular GI를 표현할 수 없음
+
+---
+
+## Slide 3 — VoxelGI: 해결책
+
+- **핵심 아이디어**: 씬 전체를 voxel grid로 변환 → 각 voxel에 빛 정보를 저장
+- 저장된 voxel 데이터를 **Cone Tracing**으로 샘플링 → 간접광 계산
+
+**DDGI / SurfelGI 한계를 어떻게 해결하는가?**
+
+| 한계 | VoxelGI 해결 방법 |
+|---|---|
+| 해상도 vs 성능 딜레마 | Clipmap — LOD 개념을 이용한 거리별로 6개 레벨의 clipmap 사용 |
+| Specular GI 불가 | Cone aperture를 roughness에 맞게 자유 조절 → Specular 근사 가능 |
+| 커버리지 제한 | Clipmap 6레벨로 넓은 범위 커버 |
+
+---
+
+## Slide 4 — Voxel이란?
 - **Voxel (Volumetric Pixel)**: 3D 공간을 격자(grid)로 나눈 단위 요소
   - 2D 이미지의 픽셀처럼, 3D 공간의 각 격자 칸 하나
 - 각 voxel에 색상, 법선, 직접광 등의 정보를 저장
@@ -19,20 +68,7 @@
 
 ---
 
-## Slide 3 — VoxelGI 개요
-- **핵심 아이디어**: 씬 전체를 voxel grid로 변환 → 각 voxel에 빛 정보를 저장
-- 저장된 voxel 데이터를 **Cone Tracing**으로 샘플링 → 간접광 계산
-- DDGI와의 차이:
-  - DDGI: 공간 내 고정 probe에서 ray tracing
-  - VoxelGI: 씬 전체를 voxel로 표현 → cone tracing으로 샘플링
-
-**VoxelGI가 DDGI보다 추가로 지원하는 것: Specular GI**
-- Cone 방향/각도를 자유롭게 설정 가능
-- 반사 방향으로 좁은 cone → specular 근사 가능
-
----
-
-## Slide 4 — 전체 파이프라인 개요
+## Slide 5 — 전체 파이프라인 개요
 
 매 프레임 실행 순서:
 ```
@@ -51,7 +87,7 @@
 
 ---
 
-## Slide 5 — Clipmap 구조
+## Slide 6 — Clipmap 구조
 
 **문제**: 씬 전체를 단일 해상도 voxel로 표현하면 카메라 근처는 너무 거칠고, 멀리는 낭비
 
@@ -72,7 +108,7 @@
 
 ---
 
-## Slide 6 — ① Voxelization
+## Slide 7 — ① Voxelization
 
 **씬의 모든 geometry를 3D voxel grid로 변환**
 
@@ -98,7 +134,7 @@
 
 ---
 
-## Slide 7 — Voxel의 방향성 (Anisotropic Storage)
+## Slide 8 — Voxel의 방향성 (Anisotropic Storage)
 
 **왜 6방향으로 저장하는가?**
 
@@ -119,7 +155,7 @@
 
 ---
 
-## Slide 8 — ② Temporal Processing
+## Slide 9 — ② Temporal Processing
 
 **각 voxel에 간접광을 계산해 최종 radiance 저장**
 
@@ -149,7 +185,7 @@
 
 ---
 
-## Slide 9 — ③ SDF Jump Flood
+## Slide 10 — ③ SDF Jump Flood
 
 **SDF (Signed Distance Field): 각 voxel에서 가장 가까운 표면까지의 거리**
 
@@ -170,7 +206,7 @@
 
 ---
 
-## Slide 10 — Cone Tracing 기본 원리
+## Slide 11 — Cone Tracing 기본 원리
 
 **Cone Tracing = 특정 방향으로 점점 넓어지는 원뿔 형태로 voxel을 샘플링**
 
@@ -194,7 +230,7 @@
 
 ---
 
-## Slide 11 — ④ Resolve Diffuse
+## Slide 12 — ④ Resolve Diffuse
 
 **화면 각 픽셀에서 16개 방향으로 Cone Tracing → Diffuse GI 계산**
 
@@ -213,7 +249,7 @@
 
 ---
 
-## Slide 12 — ⑤ Resolve Specular
+## Slide 13 — ⑤ Resolve Specular
 
 **반사 방향으로 단일 narrow cone → Specular GI 계산**
 
@@ -231,13 +267,13 @@ cone aperture = roughness    (거칠수록 cone이 넓어짐)
 | 0.5 | 중간 | 흐릿한 반사 |
 | 1 (rough) | 넓음 | diffuse에 가까운 반사 |
 
-- DDGI가 할 수 없는 **Specular GI를 VoxelGI가 지원하는 이유**
+- DDGI / SurfelGI가 할 수 없는 **Specular GI를 VoxelGI가 지원하는 이유**
   - 원하는 방향으로 cone을 자유롭게 발사할 수 있기 때문
 - 이미지 자리: Specular reflection ON/OFF 비교
 
 ---
 
-## Slide 13 — 전체 흐름 요약 다이어그램
+## Slide 14 — 전체 흐름 요약 다이어그램
 
 ```
 [씬 geometry + 광원]
@@ -261,7 +297,7 @@ cone aperture = roughness    (거칠수록 cone이 넓어짐)
 
 ---
 
-## Slide 14 — VizMotive 구현 결과
+## Slide 15 — VizMotive 구현 결과
 - 이미지 자리 ×3~4장:
   - **GI OFF** vs **GI ON** 비교
   - Specular reflection 효과
@@ -270,7 +306,7 @@ cone aperture = roughness    (거칠수록 cone이 넓어짐)
 
 ---
 
-## Slide 15 — VoxelGI의 장점과 한계
+## Slide 16 — VoxelGI의 장점과 한계
 
 | | 내용 |
 |---|---|
@@ -283,7 +319,27 @@ cone aperture = roughness    (거칠수록 cone이 넓어짐)
 
 ---
 
-## Slide 16 — 마무리 & 다음 발표 예고
+## Slide 17 — GI 기법 3종 비교
+
+| 항목 | DDGI | SurfelGI | VoxelGI |
+|---|---|---|---|
+| **빛 저장 방식** | Probe SH (공간 격자) | Surfel SH (표면 부착) | Voxel Radiance (3D 그리드) |
+| **씬 표현** | 빈 공간 포함 전체 | 표면에만 존재 | 씬 전체 Voxel화 |
+| **간접광 샘플링** | 4 Probe Bilinear 보간 | 주변 Surfel 가중 평균 | Cone Tracing |
+| **Ray 방향** | 전방향 360° | 법선 기준 반구 | Cone (aperture 자유 조절) |
+| **Diffuse GI** | ✓ | ✓ | ✓ |
+| **Specular GI** | ✗ | ✗ | ✓ |
+| **공간 커버리지** | Probe 격자 범위 | 카메라 Frustum 기반 | Clipmap 6레벨 (넓음) |
+| **HW 요구** | Rasterization | Rasterization | Rasterization |
+| **메모리 비용** | 낮음 | 낮음 | 높음 (64³ × 6레벨) |
+| **세밀한 geometry** | 무관 | 표면 밀도에 비례 | Voxel 해상도에 제한 |
+| **주요 한계** | Specular 불가 | Frustum 밖 갱신 안 됨 | Voxelization 비용 |
+
+> **핵심 차이**: DDGI·SurfelGI는 SH 기반 저주파 간접광만 / VoxelGI는 Cone Tracing으로 Specular까지
+
+---
+
+## Slide 18 — 마무리
 - VoxelGI 핵심: **씬을 voxel로 변환 → cone tracing으로 diffuse + specular GI 계산**
-- DDGI와 비교: probe 대신 voxel grid 사용, specular 추가 지원
-- 다음: **SurfelGI** — 씬 표면에 surfel을 배치해 GI를 계산하는 방식
+- DDGI·SurfelGI 대비 추가 지원: **Specular GI**, Clipmap 기반 넓은 커버리지
+- 세 기법 모두 ray tracing HW 없이 rasterization 기반으로 동작
