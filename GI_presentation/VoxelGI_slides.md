@@ -18,6 +18,8 @@
 
 ![alt text](image-9.png)
 
+![alt text](image-10.png)
+
 
 ## Slide 2 — 이전 기법들의 한계
 
