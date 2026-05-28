@@ -354,3 +354,7 @@ DDGI 와 공통점 (SH 로 저장, specular 안됨)
 Ddgi 와 차이점 (필요한 곳에만 surfel 생성됨)
 장점
 한계
+
+
+
+거리기반 선형 감쇠 * 법선 정렬도 에 smoothstep, 이후 차폐 확률 감쇠 적용, + life 가중치 (방금 생성된 surfel 은 가중치 낮게)

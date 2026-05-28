@@ -22,6 +22,7 @@
 
 ![alt text](image-11.png)
 
+![alt text](image-12.png)
 
 ## Slide 2 — 이전 기법들의 한계
 
