@@ -27,7 +27,30 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 
 ---
 
-## 2. stat chaos — Chaos 물리 솔버
+## 2. 렌더링 병목 여부 검증
+
+### 2-1. 에디터 vs PIE 비교
+
+| 상태 | FPS | 조건 |
+|------|-----|------|
+| 에디터 (BeginPlay 없음) | 70+ | 탱크 30대 배치, Lumen·그림자 활성화 |
+| PIE (BeginPlay 후) | 7~8 | 탱크 30대 활성화 |
+
+렌더링 품질 설정은 동일. 차이는 오직 탱크 시뮬레이션 활성화 여부.
+
+### 2-2. 추가 테스트
+
+| 테스트 | 결과 |
+|--------|------|
+| `r.Shadow.Virtual.Enable 0` (그림자 비활성화) | FPS 변화 없음 |
+| `r.SkinCache.Mode 0` (GPU 스키닝 → CPU) | FPS 변화 없음 |
+| 카메라를 탱크 반대 방향으로 (프러스텀 컬링) | FPS 변화 없음 |
+
+**결론: 렌더링, 그림자, Lumen, GPU 스키닝은 병목 원인 아님 (확인)**
+
+---
+
+## 3. stat chaos — Chaos 물리 솔버
 
 `stat chaos` 명령으로 측정한 Physics Tick 비용.
 
@@ -44,29 +67,7 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 
 **관찰:**
 - 30대 기준 Chaos 솔버 총합 **~2.63ms** — 전체 122ms의 2.1%
-- 스케일링: **준선형** (배칭 있음, 탱크당 한계비용 ~0.07ms)
 - **Chaos 물리 솔버는 병목 아님 (확인)**
-
----
-
-## 3. 렌더링 병목 여부 검증
-
-### 3-1. 에디터 vs PIE 비교
-| 상태 | FPS | 조건 |
-|------|-----|------|
-| 에디터 (BeginPlay 없음) | 70+ | 탱크 30대 배치, Lumen·그림자 활성화 |
-| PIE (BeginPlay 후) | 7~8 | 탱크 30대 활성화 |
-
-렌더링 품질 설정은 동일. 차이는 오직 탱크 시뮬레이션 활성화 여부.
-
-### 3-2. 추가 테스트
-| 테스트 | 결과 |
-|--------|------|
-| `r.Shadow.Virtual.Enable 0` (그림자 비활성화) | FPS 변화 없음 |
-| `r.SkinCache.Mode 0` (GPU 스키닝 → CPU) | FPS 변화 없음 |
-| 카메라를 탱크 반대 방향으로 (프러스텀 컬링) | FPS 변화 없음 |
-
-**결론: 렌더링, 그림자, Lumen, GPU 스키닝은 병목 원인 아님 (확인)**
 
 ---
 
@@ -75,48 +76,63 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 트레이스 수집: PIE 30대 실행 중 `Trace.Start default,cpu,frame` → `Trace.Stop`  
 파일: `Saved/Profiling/*.utrace`
 
-### 4-1. Timers 패널 — 주요 항목 (30대 기준)
+### 4-1. 병목 확정 — VehicleTick Blueprint
 
-![Insights 타임라인 전체](03_insights_timeline_overview.png)
+![Insights 타임라인](03_insights_timeline_overview.png)
 
-| 항목 | 비용 | 비고 |
-|------|------|------|
-| **ProcessUntilTasksComplete (Excl)** | **~83ms** | 게임 스레드 stall — 원인 미확정 |
-| USceneComponent::UpdateOverlaps | 7.0ms (1979 calls) | 이동 탱크 충돌 오버랩 갱신 |
-| USkeletalMeshComponent_CompleteParallelAnimationEvaluation | 4.9ms | 애니메이션 완료 |
-| Niagara | 3.8ms | 엔진 파티클 |
-| FActorComponentTickFunction::ExecuteTick | 3.6ms | 컴포넌트 틱 |
-| Chaos_PhysicsParallelFor | 0.5ms | 물리 |
-| **K2Node (Blueprint VM)** | **0ms** | Blueprint 로직은 병목 아님 (확인) |
+ProcessUntilTasksComplete (94.5ms) 내부에서 게임 스레드가 30대 탱크의 Blueprint 틱을 순차 처리. 핵심 Timers 수치 (30대, 단위: ms):
 
-### 4-2. ProcessUntilTasksComplete 분석
+| Timer | Count | Incl (ms) | 비고 |
+|-------|-------|-----------|------|
+| `ProcessUntilTasksComplete` | 8 | 94.5 | 게임 스레드 대기 루프 |
+| `WorldTick` | 90 | 82.0 | 펌프 루프 안에서 실행됨 |
+| `ReceiveTick` | 63 | 75.6 | |
+| **`BP_M1A2_C`** | 32 | **74.2** | 탱크당 ~2.45ms |
+| `ExecuteUbergraph_BP_VehicleBase` | 92 | 73.9 | |
+| **`VehicleTick`** | 32 | **73.6** | **실질 병목** |
+| **`SetTracksTransform`** | 63 | **52.4** | 트랙 스플라인 애니메이션 |
+| `VehicleMesh` | 270 | 25.0 | 인스턴스 메시 업데이트 |
+| `FinalDistanceCalculation` | **4725** | 18.5 | 탱크당 157회 스플라인 쿼리 |
+| `NS_SkidMarks` | 123 | 17.7 | Niagara 스키드마크 파티클 |
+| `TrackPathAnimations` | 62 | 6.4 | |
+| `TrackPathShift` | 62 | 5.7 | |
 
-`UWorld_Tick → TickCompletionEvents → ProcessUntilTasksComplete` 구조.
+### 4-2. 호출 계층 구조
 
-![GameThread RenderThread 상세](04_insights_gamethread_renderthread.png)
+```
+ProcessUntilTasksComplete (94.5ms)
+  └ WorldTick (82ms) ← 게임스레드 펌프 루프가 픽업
+      └ ReceiveTick → BP_M1A2_C → ExecuteUbergraph_BP_VehicleBase
+          └ VehicleTick (2.45ms/대 × 30대)
+              └ SetTracksTransform (1.75ms/대)
+                  ├ FinalDistanceCalculation × 157회/대
+                  ├ GetRotationAtDistanceAlongSpline × 157회/대
+                  ├ GetLocationAtDistanceAlongSpline × 157회/대
+                  ├ GetRightVectorAtDistanceAlongSpline × 157회/대
+                  ├ VehicleMesh (인스턴스 업데이트)
+                  └ NS_SkidMarks (Niagara)
+```
 
-**Callees (ProcessUntilTasksComplete 내부에서 실행되는 것):**
+### 4-3. 스플라인 쿼리 규모
 
-| Callee | Count | Incl |
-|--------|-------|------|
-| USkeletalMeshComponent_CompleteParallelAnimationEvaluation | 31 | 4.9ms |
-| USceneComponent::UpdateOverlaps | 961+1018 | 7.0ms |
-| FActorComponentTickFunction::ExecuteTick | 218 | 3.6ms |
-| WaitForTasks | 1 | 2.4ms |
-| UInstancedStaticMeshComponent::CalcBoundsImpl | 480 | 0.5ms |
+| 연산 | 총 횟수 | 탱크당 |
+|------|---------|--------|
+| `FinalDistanceCalculation` | 4725 | 157.5 |
+| `GetRotationAtDistanceAlongSpline` | 4725 | 157.5 |
+| `GetLocationAtDistanceAlongSpline` | 4725 | 157.5 |
+| `GetRightVectorAtDistanceAlongSpline` | 4725 | 157.5 |
+| `GetScaleAtDistanceAlongSpline` | 4725 | 157.5 |
+| `SetLocationAtSplinePoint` | 620 | ~20 |
 
-- Callees 합계: ~18ms
-- ProcessUntilTasksComplete Excl: **83ms** (순수 대기/스핀)
-- 83ms 동안 TaskGraph Worker 행: **대부분 idle (sparse tasks)**
+→ 프레임당 스플라인 쿼리 **총 ~23,000회**, 모두 게임 스레드에서 직렬 실행.
 
-### 4-3. Timeline — Worker 행
+### 4-4. Worker 행 분석
 
 ![Worker 행](05_insights_workers_idle.png)
 
-- GameThread: ProcessUntilTasksComplete 85ms 블록
-- RHIThread: WaitForTasks ~75-89ms
-- RenderThread: WorldTick (99ms) 내에서 WaitForTasks **~6.5ms × 13회 반복**
-- TaskGraph Worker #0, #1: **대부분 idle**, sparse한 작은 태스크만 존재
+- 일반 TaskGraph Worker: 대부분 idle (sparse tasks)
+- physics 솔버(2.63ms), 애니메이션 평가 등 소규모 작업만 존재
+- **게임 스레드가 직접 BP 틱을 처리하는 동안 Worker는 유휴 상태**
 
 ---
 
@@ -146,9 +162,9 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 | 20 | 11.31 | 87.08 | 87.78 | 25.13 | 14.74 | 26.98 | 140.64 | 1508 | 2758.8K |
 | 30 |  8.08 | 128.26| 123.40| 29.77 | 17.83 | 25.42 | 180.18 | 1909 | 3927.9K |
 
-> 이 측정은 별도 실행으로, PIE 창 크기가 달라 Draw/GPU 수치가 벤치마크(섹션 1)와 다소 차이 있음.
+> 별도 실행으로 측정. PIE 창 크기 차이로 Draw/GPU 수치가 섹션 1과 다소 차이 있음.
 
-### 5-3. stat chaos — Physics Tick 주요 서브항목 (InclusiveAvg, ms)
+### 5-3. stat chaos — Physics Tick 서브항목 (InclusiveAvg, ms)
 
 | 항목 | 1대 | 5대 | 10대 | 15대 | 20대 | 30대 |
 |------|-----|-----|------|------|------|------|
@@ -176,45 +192,87 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 | Phys SetBodyTransform (call) | 3 | 15 | 30 | 45 | 60 | 84 | 선형 (3/대) |
 | Query PhysicalMaterialMask Hit (call) | 15 | 71 | 141 | 190 | 262 | 397 | 선형 (~13/대) |
 | SyncBodies (ms) | 0.06 | 0.13 | 0.21 | 0.29 | 0.40 | 0.56 | 선형 |
-| CreateExternalAccelerationStructure (ms) | 0.01 | 0.03 | 0.05 | 0.07 | 0.09 | 0.12 | 선형 |
-
-### 5-6. 분석
-
-**선형 스케일링 항목 (탱크당 고정 비용):**
-- `Phys SetBodyTransform`: 정확히 3회/대 → chassis + 좌우 트랙 또는 포탑 3개 바디
-- `Query PhysicalMaterialMask Hit`: ~13회/대 → 휠 서스펜션 레이캐스트 (4휠 × 3~4회)
-- `OnSyncBodies`: ~24회/대 → 탱크 1대당 물리 바디 수 (휠 포함)
-- `SyncBodies` ms: 탱크당 ~0.017ms
-
-**준2차 스케일링 항목 (주목):**
-- `ParticlesParallelFor` / `ParticlesSequentialFor`: 1대→30대에서 60배 증가 (탱크는 30배)
-- Chaos 내부 브로드페이즈 충돌 검사에서 강체들 간 O(N²) 상호작용 발생
-- 30대에서 242 call — 탱크끼리 근접 배치 시 더 심화됨
-
-**결론:**
-- Chaos Vehicle 솔버 자체는 O(N) 선형 또는 준선형
-- 전체 Physics Tick (30대 기준 2.63ms)은 122ms 프레임의 2.2%에 불과
-- 물리 솔버는 병목 아님 (확인)
 
 ---
 
-## 6. 확인된 사실 요약
+## 6. Chaos 스레딩 구조 분석 (소스 코드)
+
+소스 경로: `D:\Epic games\UE_5.7\Engine\Source\Runtime\Experimental\Chaos\`
+
+### 6-1. Chaos는 UE 내장 물리 엔진
+
+UE4까지는 NVIDIA PhysX를 사용했고, UE5부터 Epic이 자체 제작한 Chaos로 교체됨. 별도 엔진이 아니라 UE 런타임에 통합되어 있음.
+
+### 6-2. 물리 태스크 실행 위치
+
+`PhysicsSolverBase.cpp`:
+```cpp
+FAutoConsoleTaskPriority CPrio_FPhysicsTickTask(
+    TEXT("TaskGraph.TaskPriorities.PhysicsTickTask"),
+    ENamedThreads::HighThreadPriority,   // Hi-Pri Worker 우선
+    ENamedThreads::NormalTaskPriority,
+    ENamedThreads::HighTaskPriority      // 없으면 일반 Worker
+);
+```
+
+Hi-Pri TaskGraph Worker가 없는 환경(본 테스트)에서는 일반 TaskGraph Worker에서 높은 우선순위로 실행됨.
+
+### 6-3. 동기화 흐름
+
+```
+FChaosScene::StartFrame()
+  → Solver->AdvanceAndDispatch_External(dt)
+      → FPhysicsSolverAdvanceTask (Worker에서 2.63ms)
+      → BlockingTasks 반환
+  → CompletionEvents.Add(SolverEvent)
+
+FEndPhysicsTickFunction::ExecuteTick()
+  → MyCompletionGraphEvent->DontCompleteUntil(
+        FSimpleDelegateGraphTask(FinishPhysicsSim, GameThread)
+    )
+
+ProcessUntilTasksComplete (TG_EndPhysics)
+  → physics 완료(2.63ms) 후 FinishPhysicsSim 실행
+  → 그 사이 pump loop에서 TG_DuringPhysics 틱들을 처리
+    → BP_M1A2_C VehicleTick × 30 ← 여기서 73ms 소비
+```
+
+### 6-4. ProcessUntilTasksComplete 구조
+
+`TickTaskManager.cpp`:
+```cpp
+// 완료 이벤트 기다리는 동안 게임 스레드가 직접 태스크 실행
+return FTaskGraphInterface::EProcessTasksOperation::ProcessOneOtherTask;
+```
+
+TG_DuringPhysics는 `bBlockTillComplete = false`로 실행돼 태스크가 큐에 쌓임. TG_EndPhysics의 ProcessUntilTasksComplete 펌프 루프가 이를 픽업하여 직렬 실행 → 73ms 소비.
+
+---
+
+## 7. 확인된 사실 요약
 
 | 항목 | 결론 |
 |------|------|
-| Chaos 물리 솔버 | 병목 아님 (2.63ms) |
-| Blueprint VM | 병목 아님 (0ms) |
-| 애니메이션 평가 | 병목 아님 (4.9ms) |
-| 컴포넌트 틱 | 병목 아님 (3.6ms) |
-| Niagara | 병목 아님 (3.8ms) |
-| 렌더링 / 그림자 / Lumen | 병목 아님 (컬링·비활성화 테스트 무효) |
-| **ProcessUntilTasksComplete 83ms stall** | **원인 미확정** |
+| Chaos 물리 솔버 | 병목 아님 (30대 기준 2.63ms) |
+| Blueprint VM (K2Node) | 초기 측정 오류 — CPU trace 미포함 상태였음 |
+| 애니메이션 평가 | 병목 아님 (4.5ms) |
+| 렌더링 / 그림자 / Lumen | 병목 아님 (컬링·비활성화 테스트 확인) |
+| **`VehicleTick` BP (SetTracksTransform)** | **병목 확정 — 30대 × 2.45ms = 73ms** |
+| **스플라인 쿼리 (FinalDistanceCalculation)** | **병목 핵심 — 탱크당 157회 × 5종 × 30대** |
+
+**프레임 시간 분해 (30대, ~122ms):**
+- VehicleTick Blueprint: **~73ms** (60%)
+- physics 솔버: **~2.6ms** (2%)
+- 나머지 (렌더링, 애니메이션 등): **~47ms** (38%)
 
 ---
 
-## 7. 미해결 사항
+## 8. 최적화 방향
 
-- ProcessUntilTasksComplete 83ms stall의 정확한 원인
-  - TaskGraph Worker가 idle인데 게임 스레드가 무엇을 기다리는지 미확정
-  - RenderThread도 동일한 stall 패턴 (ProcessUntilTasksComplete ~86ms)
-- BeginPlay 전후 유일한 차이: 탱크 시뮬레이션 활성화 (SetSimulatePhysics, VehiclePossessed)
+| 방법 | 예상 효과 |
+|------|-----------|
+| 트랙 세그먼트 수 감소 (157 → 50) | SetTracksTransform 비용 3× 감소 |
+| 거리 기반 트랙 LOD (원거리 탱크 트랙 비활성화) | 화면 밖 탱크 비용 거의 0 |
+| 스플라인 쿼리 결과 캐싱 (매 프레임 재계산 방지) | FinalDistanceCalculation 제거 |
+| SetTracksTransform을 Worker 스레드로 이동 | 게임 스레드 직렬 병목 해소 |
+| NS_SkidMarks LOD (원거리 비활성화) | 17.7ms 중 일부 제거 |
