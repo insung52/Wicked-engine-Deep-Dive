@@ -210,8 +210,6 @@ RHIThread의 `WaitForTasks (66.8ms)` 는 게임 스레드가 BP 틱을 직렬로
 
 ## 6. Chaos 스레딩 구조 분석 (소스 코드)
 
-소스 경로: `D:\Epic games\UE_5.7\Engine\Source\Runtime\Experimental\Chaos\`
-
 ### 6-1. Chaos는 UE 내장 물리 엔진
 
 UE4까지는 NVIDIA PhysX를 사용했고, UE5부터 Epic이 자체 제작한 Chaos로 교체됨. 별도 엔진이 아니라 UE 런타임에 통합되어 있음.
