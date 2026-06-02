@@ -78,16 +78,22 @@ UE 5.7 / BP_M1A2 (Chaos Vehicle) / TankSTDriver (C++ AI 제어)
 
 ### 4-1. 병목 확정 — VehicleTick Blueprint
 
-![Insights 타임라인](03_insights_timeline_overview.png)
+![Insights 전체 타임라인](insights_overview.png)
 
-ProcessUntilTasksComplete (94.5ms) 내부에서 게임 스레드가 30대 탱크의 Blueprint 틱을 순차 처리. 핵심 Timers 수치 (30대, 단위: ms):
+이미지에서 확인되는 프레임 구조 (Frame 830438, 118.1ms):
+- Game Thread: `UWorld_Tick (92.6ms)` → `TickCompletionEvents (78.2ms)` → `ProcessUntilTasksComplete (78.1ms)` → `BP_M1A2_C` 블록 × 30대 순차 나열
+- Render Thread: `SceneRenderGroup (95.7ms) — ShadowDepthManager (ShadowDepthManager_1)` → `RenderGraphExecute (95ms)`
+- **RHIThread: `WaitForTasks (66.8ms)`** — GPU 파이프라인이 게임 스레드 BP 실행 구간 내내 유휴 상태
+
+ProcessUntilTasksComplete 내부에서 게임 스레드가 **30대 탱크** 의 Blueprint 틱을 순차 처리. 핵심 Timers 수치 (30대, Timers 패널 집계, 단위: ms):
 
 | Timer | Count | Incl (ms) | 비고 |
 |-------|-------|-----------|------|
-| `ProcessUntilTasksComplete` | 8 | 94.5 | 게임 스레드 대기 루프 |
-| `WorldTick` | 90 | 82.0 | 펌프 루프 안에서 실행됨 |
+| `TickCompletionEvents` | — | ~78.2 | ProcessUntilTasksComplete를 감싸는 래퍼 |
+| `ProcessUntilTasksComplete` | 8 | 94.5 | 게임 스레드 대기·실행 루프 (프레임별 78~95ms 편차) |
+| `WorldTick` | 90 | 82.0 | 펌프 루프 안에서 픽업됨 |
 | `ReceiveTick` | 63 | 75.6 | |
-| **`BP_M1A2_C`** | 32 | **74.2** | 탱크당 ~2.45ms |
+| **`BP_M1A2_C`** | 32 | **74.2** | 탱크당 **2.3ms** (이미지 기준) |
 | `ExecuteUbergraph_BP_VehicleBase` | 92 | 73.9 | |
 | **`VehicleTick`** | 32 | **73.6** | **실질 병목** |
 | **`SetTracksTransform`** | 63 | **52.4** | 트랙 스플라인 애니메이션 |
@@ -99,18 +105,23 @@ ProcessUntilTasksComplete (94.5ms) 내부에서 게임 스레드가 30대 탱크
 
 ### 4-2. 호출 계층 구조
 
+![Insights 확대 뷰](insights_zoomed.png)
+
 ```
-ProcessUntilTasksComplete (94.5ms)
-  └ WorldTick (82ms) ← 게임스레드 펌프 루프가 픽업
-      └ ReceiveTick → BP_M1A2_C → ExecuteUbergraph_BP_VehicleBase
-          └ VehicleTick (2.45ms/대 × 30대)
-              └ SetTracksTransform (1.75ms/대)
-                  ├ FinalDistanceCalculation × 157회/대
-                  ├ GetRotationAtDistanceAlongSpline × 157회/대
-                  ├ GetLocationAtDistanceAlongSpline × 157회/대
-                  ├ GetRightVectorAtDistanceAlongSpline × 157회/대
-                  ├ VehicleMesh (인스턴스 업데이트)
-                  └ NS_SkidMarks (Niagara)
+TickCompletionEvents (78.2ms)
+  └ ProcessUntilTasksComplete (78.1ms)
+        └ WorldTick ← 게임스레드 펌프 루프가 픽업
+              └ ReceiveTick → BP_M1A2_C → ExecuteUbergraph_BP_VehicleBase
+                    └ VehicleTick (2.3ms/대 × 30대)
+                          └ SetTracksTransform
+                                ├ FinalDistanceCalculation × 157회/대
+                                ├ GetRotationAtDistanceAlongSpline × 157회/대
+                                ├ GetLocationAtDistanceAlongSpline × 157회/대
+                                ├ GetRightVectorAtDistanceAlongSpline × 157회/대
+                                ├ VehicleMesh (인스턴스 업데이트)
+                                └ NS_SkidMarks (Niagara)
+
+[RHIThread] WaitForTasks (66.8ms) — 위 구간 동안 GPU 파이프라인 유휴
 ```
 
 ### 4-3. 스플라인 쿼리 규모
@@ -126,13 +137,15 @@ ProcessUntilTasksComplete (94.5ms)
 
 → 프레임당 스플라인 쿼리 **총 ~23,000회**, 모두 게임 스레드에서 직렬 실행.
 
-### 4-4. Worker 행 분석
+### 4-4. 스레드별 상태 (이미지에서 직접 확인)
 
-![Worker 행](05_insights_workers_idle.png)
+| 스레드 | ProcessUntilTasksComplete 구간 상태 |
+|--------|--------------------------------------|
+| **Game Thread** | `BP_M1A2_C × 30` 순차 실행 (78ms 전부 소비) |
+| **RHIThread** | `WaitForTasks (66.8ms)` — 유휴. GPU 파이프라인이 게임 스레드를 기다리는 상태 |
+| **Render Thread** | `SceneRenderGroup (95.7ms) — ShadowDepthManager_1` 동시 실행 |
 
-- 일반 TaskGraph Worker: 대부분 idle (sparse tasks)
-- physics 솔버(2.63ms), 애니메이션 평가 등 소규모 작업만 존재
-- **게임 스레드가 직접 BP 틱을 처리하는 동안 Worker는 유휴 상태**
+RHIThread의 `WaitForTasks (66.8ms)` 는 게임 스레드가 BP 틱을 직렬로 처리하는 동안 GPU 커맨드 제출이 멈춰 있음을 의미한다. 즉 **CPU(게임 스레드)가 유일한 병목**이며, GPU는 CPU를 기다리고 있는 구조.
 
 ---
 
@@ -257,7 +270,7 @@ TG_DuringPhysics는 `bBlockTillComplete = false`로 실행돼 태스크가 큐�
 | Blueprint VM (K2Node) | 초기 측정 오류 — CPU trace 미포함 상태였음 |
 | 애니메이션 평가 | 병목 아님 (4.5ms) |
 | 렌더링 / 그림자 / Lumen | 병목 아님 (컬링·비활성화 테스트 확인) |
-| **`VehicleTick` BP (SetTracksTransform)** | **병목 확정 — 30대 × 2.45ms = 73ms** |
+| **`VehicleTick` BP (SetTracksTransform)** | **병목 확정 — 30대 × 2.3ms ≈ 69ms (단일 프레임 기준)** |
 | **스플라인 쿼리 (FinalDistanceCalculation)** | **병목 핵심 — 탱크당 157회 × 5종 × 30대** |
 
 **프레임 시간 분해 (30대, ~122ms):**
