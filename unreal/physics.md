@@ -151,6 +151,7 @@ Phase 1과 동일한 3가지 관점(통합 경계 / 데이터 흐름 / 스레딩
 
 - [x] UE5 Chaos 스레딩 구조 파악 (chaos_vehicle_debug.md)
 - [x] 30탱크 성능 병목 분석 완료
-- [ ] Phase 1: UE5 통합 아키텍처 분석
-- [ ] Phase 2: Wicked Engine 분석
+- [x] 물리 엔진 기초 개념 정리 → physics_basics.md  ← 여기서부터 읽기
+- [x] Phase 1: UE5 통합 아키텍처 분석 → ue5_physics_integration.md
+- [x] Phase 2: Wicked Engine 분석 → wicked_jolt_engine.md / wicked_physics_integration.md
 - [ ] Phase 3: 비교 문서
