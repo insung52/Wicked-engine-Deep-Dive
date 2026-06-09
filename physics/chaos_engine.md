@@ -1,7 +1,5 @@
 # Chaos 물리 엔진
 
-UE5의 내장 물리 엔진. 소스: `D:\Epic games\UE_5.7\Engine\Source\Runtime\Experimental\Chaos\`
-
 ---
 
 ## Chaos가 뭔가

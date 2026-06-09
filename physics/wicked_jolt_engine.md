@@ -1,6 +1,6 @@
 # Jolt Physics 엔진
 
-Wicked Engine이 사용하는 물리 엔진. 소스: `C:\graphics\wicked\origin92\WickedEngine\WickedEngine\Jolt\`
+Wicked Engine이 사용하는 물리 엔진.
 
 ---
 

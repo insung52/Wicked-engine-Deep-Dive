@@ -1,6 +1,6 @@
 # Wicked Engine + Jolt 물리 통합 아키텍처
 
-Wicked Engine이 Jolt Physics를 어떻게 붙였는지. 소스: `C:\graphics\wicked\origin92\WickedEngine\WickedEngine\`  
+Wicked Engine이 Jolt Physics를 어떻게 붙였는지.
 분석 관점: 통합 경계 / 데이터 흐름 / 스레딩 (UE5와 동일한 틀로 비교)
 
 ---
